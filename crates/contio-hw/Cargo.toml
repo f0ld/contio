@@ -1,0 +1,17 @@
+[package]
+name = "contio-hw"
+description = "Hardware detection and live metrics for contio (Linux sysfs/procfs)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+contio-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

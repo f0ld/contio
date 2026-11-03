@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# contio: SvelteKit keeps app code in src/lib (the Python `lib/` rule above would hide it)
+!apps/gui/src/lib/

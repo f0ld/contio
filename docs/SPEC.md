@@ -335,6 +335,6 @@ contio serve                            # run daemon in foreground
 | 11 | Packaging | **Dev builds now**, RPM + systemd user unit later |
 
 ## 13. Next Steps
-1. M0 spikes: ~~NPU runtime on Fedora 44~~ (done, `docs/spikes/m0-npu.md`), ~~GPU/CPU via llama.cpp Vulkan~~ (done in power saver + balanced, `docs/spikes/m0-gpu.md`; ROCm + `performance` open), minimal Tauri + Svelte shell talking to a stub daemon.
+1. M0 spikes: ~~NPU runtime on Fedora 44~~ (done, `docs/spikes/m0-npu.md`), ~~GPU/CPU via llama.cpp Vulkan~~ (done in power saver + balanced, `docs/spikes/m0-gpu.md`; ROCm + `performance` open), ~~minimal Tauri + Svelte shell talking to a stub daemon~~ (done, `docs/spikes/m0-gui.md`).
 2. Detail specs per area: catalog schema + registry TOML format, `Backend`/`BackendInstaller` traits, management API (OpenAPI), benchmark result schema.
 3. Scaffold the Cargo workspace (§3).
