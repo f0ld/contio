@@ -1,0 +1,46 @@
+/* Shared styles for all contio views. */
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1d2129;
+  --muted: #677084;
+  --border: #e1e4ea;
+  --accent: #2f6fde;
+  --ok: #1f8a4c;
+  --warn: #b7791f;
+  --err: #c53030;
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171c;
+    --card: #1e2128;
+    --text: #e6e8ec;
+    --muted: #9aa3b2;
+    --border: #2e323b;
+    --accent: #6ea0ff;
+  }
+}
+body {
+  margin: 0;
+}
+h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+.sub {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+code {
+  font-size: 0.85em;
+}

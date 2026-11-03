@@ -58,3 +58,20 @@ export interface Metrics {
   pools: MemoryPool[];
   power: PowerInfo;
 }
+
+// Mirrors crates/contio-core/src/model.rs (ModelStatus, state flattened).
+export type ModelState =
+  | { state: "stopped" }
+  | { state: "loading" }
+  | { state: "ready"; port: number }
+  | { state: "failed"; error: string };
+
+export type ModelStatus = {
+  id: string;
+  device: DeviceKind;
+  pool: MemoryPoolKind;
+  backend: string | null;
+  pinned: boolean;
+  estimated_bytes: number | null;
+  in_flight: number;
+} & ModelState;

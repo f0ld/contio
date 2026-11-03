@@ -346,7 +346,7 @@ contio serve                            # run daemon in foreground
 - [x] Config file registry (`docs/config.example.toml`) until the catalog exists.
 - [x] Verified end-to-end on the Framework 13: GPU (Qwen3.6 35B-A3B), CPU (Llama 1B), and NPU (Qwen3 4B + co-loaded embeddings) served at the same time. Tool calls and streaming work through the gateway.
 - [x] `contio` CLI: `status`, `hw`, `models`/`ps`, `load`, `unload`, `chat` (streaming, stdin, speed stats), `--json`, `--url`/`CONTIO_URL`
-- [ ] GUI: model list with load/unload and status
+- [x] GUI: model list with load/unload, live state and errors; API card with OpenAI/Anthropic endpoints; shared styles in `app.css`
 - [x] Responses API (incl. streaming, function calls, `previous_response_id` via in-memory store) + Anthropic Messages (incl. streaming, tool use/results, thinking blocks, `count_tokens` estimate). Verified with the official OpenAI and Anthropic Python SDKs (`scripts/e2e/sdk_test.py`).
 - [x] Gateway guards: identical consecutive tool calls collapsed (non-stream + stream; streamed tool calls are buffered until the end), `response_format` validated (non-stream), reported under a `contio` response field
 - [x] Model aliases (`[[aliases]]`), including `upstream_model` to address FLM's co-loaded embedding model under its own name

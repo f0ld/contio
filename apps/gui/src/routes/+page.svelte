@@ -8,6 +8,7 @@
     subscribeMetrics,
     type ConnectionState,
   } from "$lib/daemon";
+  import ModelList from "$lib/components/ModelList.svelte";
   import type { HardwareInfo, MemoryPool, Metrics } from "$lib/types";
 
   let hw = $state<HardwareInfo | null>(null);
@@ -76,6 +77,8 @@
       {/each}
     </section>
 
+    <ModelList online={conn === "open"} />
+
     <section class="stats">
       <div class="card stat">
         <span class="label">SoC power</span>
@@ -132,41 +135,18 @@
 
     <section class="card">
       <h2>API</h2>
-      <p>OpenAI-compatible endpoint: <code>{DAEMON_URL}/v1</code></p>
-      <p class="sub">No models installed yet.</p>
+      <dl>
+        <dt>OpenAI</dt>
+        <dd><code>{DAEMON_URL}/v1</code> <span class="sub">chat, completions, responses, embeddings</span></dd>
+        <dt>Anthropic</dt>
+        <dd><code>{DAEMON_URL}</code> <span class="sub">messages</span></dd>
+      </dl>
+      <p class="sub">Use any API key; use a model id or alias as the model name. Models load on first request.</p>
     </section>
   {/if}
 </main>
 
 <style>
-  :global(:root) {
-    --bg: #f6f7f9;
-    --card: #ffffff;
-    --text: #1d2129;
-    --muted: #677084;
-    --border: #e1e4ea;
-    --accent: #2f6fde;
-    --ok: #1f8a4c;
-    --warn: #b7791f;
-    --err: #c53030;
-    font-family: system-ui, sans-serif;
-    font-size: 15px;
-    color: var(--text);
-    background: var(--bg);
-  }
-  @media (prefers-color-scheme: dark) {
-    :global(:root) {
-      --bg: #15171c;
-      --card: #1e2128;
-      --text: #e6e8ec;
-      --muted: #9aa3b2;
-      --border: #2e323b;
-      --accent: #6ea0ff;
-    }
-  }
-  :global(body) {
-    margin: 0;
-  }
   main {
     max-width: 760px;
     margin: 0 auto;
@@ -182,16 +162,6 @@
   h1 {
     margin: 0;
     font-size: 1.5rem;
-  }
-  h2 {
-    margin: 0 0 0.75rem;
-    font-size: 1rem;
-  }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1rem;
   }
   .conn {
     font-size: 0.85rem;
@@ -242,8 +212,7 @@
     flex-direction: column;
     gap: 0.2rem;
   }
-  .label,
-  .sub {
+  .label {
     color: var(--muted);
     font-size: 0.85rem;
   }
@@ -260,7 +229,7 @@
   }
   dl {
     display: grid;
-    grid-template-columns: 4rem 1fr;
+    grid-template-columns: 5.5rem 1fr;
     gap: 0.6rem;
     margin: 0;
   }
@@ -269,9 +238,6 @@
   }
   dd {
     margin: 0;
-  }
-  code {
-    font-size: 0.85em;
   }
   button {
     font: inherit;

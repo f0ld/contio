@@ -1,17 +1,27 @@
 // Thin client for the contiod management API (spec §7.4).
 
-import type { HardwareInfo, Metrics } from "./types";
+import type { HardwareInfo, Metrics, ModelStatus } from "./types";
 
 export const DAEMON_URL: string = import.meta.env.VITE_CONTIOD_URL ?? "http://127.0.0.1:8080";
 
-export async function fetchHardware(signal?: AbortSignal): Promise<HardwareInfo> {
-  const res = await fetch(`${DAEMON_URL}/api/hw`, { signal });
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${DAEMON_URL}${path}`, init);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.error?.message ?? `HTTP ${res.status}`);
   }
   return res.json();
 }
+
+export const fetchHardware = (signal?: AbortSignal) => request<HardwareInfo>("/api/hw", { signal });
+
+export const fetchModels = () => request<ModelStatus[]>("/api/models");
+
+export const loadModel = (id: string) =>
+  request<ModelStatus>(`/api/models/${encodeURIComponent(id)}/load`, { method: "POST" });
+
+export const unloadModel = (id: string) =>
+  request<{ unloaded: boolean }>(`/api/models/${encodeURIComponent(id)}/unload`, { method: "POST" });
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
