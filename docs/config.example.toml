@@ -45,3 +45,14 @@ format = "flm"
 tag = "qwen3-it:4b"
 device = "npu"
 context = 8192
+
+# Aliases: other names for models (spec §7.2). `upstream_model` overrides the
+# name sent to the backend, e.g. to reach FLM's co-loaded embedding model.
+[[aliases]]
+name = "coder"
+model = "qwen3.6-35b-a3b"
+
+[[aliases]]
+name = "embed-gemma"
+model = "qwen3-4b-npu"
+upstream_model = "embed-gemma:300m"

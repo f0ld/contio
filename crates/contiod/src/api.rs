@@ -1,6 +1,8 @@
 //! HTTP surface of the daemon: management API (`/api/*`) and the
 //! OpenAI-compatible gateway (`/v1/*`, see `gateway.rs`).
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
@@ -24,6 +26,7 @@ const GUI_ORIGINS: [&str; 4] = [
     "http://tauri.localhost",
 ];
 
+use crate::config::Alias;
 use crate::gateway;
 
 #[derive(Clone)]
@@ -33,12 +36,15 @@ pub struct AppState {
     pub manager: ModelManager,
     /// Client for backend requests (no overall timeout: generations can be long).
     pub http: reqwest::Client,
+    pub aliases: Arc<HashMap<String, Alias>>,
+    /// Conversations for the Responses API's `previous_response_id`.
+    pub responses: gateway::responses::Store,
 }
 
 impl AppState {
     /// Starts a background sampler that refreshes metrics every `interval`.
     /// All WebSocket clients share this one sampler.
-    pub fn start(probe: HwProbe, manager: ModelManager, interval: Duration) -> Self {
+    pub fn start(probe: HwProbe, manager: ModelManager, aliases: Vec<Alias>, interval: Duration) -> Self {
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
         tokio::spawn(async move {
@@ -58,7 +64,14 @@ impl AppState {
                 }
             }
         });
-        Self { probe, metrics: rx, manager, http: reqwest::Client::new() }
+        Self {
+            probe,
+            metrics: rx,
+            manager,
+            http: reqwest::Client::new(),
+            aliases: Arc::new(aliases.into_iter().map(|a| (a.name.clone(), a)).collect()),
+            responses: gateway::responses::Store::default(),
+        }
     }
 }
 
@@ -75,9 +88,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/models/{id}/load", post(load_model))
         .route("/api/models/{id}/unload", post(unload_model))
         .route("/v1/models", get(gateway::models))
-        .route("/v1/chat/completions", post(gateway::proxy))
-        .route("/v1/completions", post(gateway::proxy))
-        .route("/v1/embeddings", post(gateway::proxy))
+        .route("/v1/chat/completions", post(gateway::chat))
+        .route("/v1/completions", post(gateway::passthrough))
+        .route("/v1/embeddings", post(gateway::passthrough))
+        .route("/v1/messages", post(gateway::anthropic::messages))
+        .route("/v1/messages/count_tokens", post(gateway::anthropic::count_tokens))
+        .route("/v1/responses", post(gateway::responses::create))
         .layer(cors)
         .with_state(state)
 }
@@ -167,7 +183,7 @@ mod tests {
             vec![],
             vec![],
         );
-        AppState::start(probe, manager, Duration::from_secs(60))
+        AppState::start(probe, manager, vec![], Duration::from_secs(60))
     }
 
     fn fixture() -> tempfile::TempDir {

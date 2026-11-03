@@ -78,7 +78,12 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
-    let state = api::AppState::start(probe, manager.clone(), Duration::from_millis(args.metrics_interval_ms));
+    let state = api::AppState::start(
+        probe,
+        manager.clone(),
+        config.aliases.clone(),
+        Duration::from_millis(args.metrics_interval_ms),
+    );
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;

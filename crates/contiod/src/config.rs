@@ -18,6 +18,19 @@ pub struct Config {
     pub manager: ManagerSection,
     pub backends: BackendsSection,
     pub models: Vec<ModelProfile>,
+    pub aliases: Vec<Alias>,
+}
+
+/// Another name for a model, e.g. `coder` → `qwen3.6-35b-a3b` (spec §7.2).
+/// `upstream_model` overrides the name sent to the backend, which reaches
+/// models co-loaded in one process (FLM's embedding model next to an LLM).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Alias {
+    pub name: String,
+    pub model: String,
+    #[serde(default)]
+    pub upstream_model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -106,6 +119,14 @@ impl Config {
                 expand(path);
             }
         }
+        for a in &c.aliases {
+            if !seen.insert(a.name.clone()) {
+                bail!("alias `{}` clashes with a model id or another alias", a.name);
+            }
+            if !c.models.iter().any(|m| m.id == a.model) {
+                bail!("alias `{}` points at unknown model `{}`", a.name, a.model);
+            }
+        }
         if c.manager.reserve_percent > 90 {
             bail!("manager.reserve_percent must be ≤ 90");
         }
@@ -173,6 +194,15 @@ id = "qwen3-4b-npu"
 format = "flm"
 tag = "qwen3-it:4b"
 device = "npu"
+
+[[aliases]]
+name = "coder"
+model = "qwen3.6-35b-a3b"
+
+[[aliases]]
+name = "embed-gemma"
+model = "qwen3-4b-npu"
+upstream_model = "embed-gemma:300m"
 "#;
 
     #[test]
@@ -193,6 +223,17 @@ device = "npu"
         );
         assert!(c.models[0].pinned);
         assert_eq!(c.models[1].device, DeviceKind::Npu);
+        assert_eq!(c.aliases.len(), 2);
+        assert_eq!(c.aliases[1].upstream_model.as_deref(), Some("embed-gemma:300m"));
+    }
+
+    #[test]
+    fn rejects_bad_aliases() {
+        let model = "[[models]]\nid='a'\nformat='flm'\ntag='x'\ndevice='npu'\n";
+        let clash = format!("{model}[[aliases]]\nname='a'\nmodel='a'\n");
+        assert!(Config::parse(&clash).unwrap_err().to_string().contains("clashes"));
+        let dangling = format!("{model}[[aliases]]\nname='b'\nmodel='nope'\n");
+        assert!(Config::parse(&dangling).unwrap_err().to_string().contains("unknown model"));
     }
 
     #[test]
