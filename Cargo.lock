@@ -693,6 +693,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "contio-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "contio-core",
+ "futures-util",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "contio-core"
 version = "0.1.0"
 dependencies = [
