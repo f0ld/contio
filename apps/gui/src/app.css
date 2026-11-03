@@ -44,3 +44,119 @@ h2 {
 code {
   font-size: 0.85em;
 }
+a {
+  color: var(--accent);
+}
+button {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+button.danger {
+  color: var(--err);
+}
+button.small {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.6rem;
+}
+input,
+select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+}
+table.list {
+  width: 100%;
+  border-collapse: collapse;
+}
+table.list th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 0 0.5rem 0.4rem 0;
+}
+table.list td {
+  padding: 0.45rem 0.5rem 0.45rem 0;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.pill {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.pill.fits {
+  color: var(--ok);
+}
+.pill.tight {
+  color: var(--warn);
+}
+.pill.too_big {
+  color: var(--err);
+}
+.tag {
+  display: inline-block;
+  margin: 0 0.25rem 0.15rem 0;
+  padding: 0 0.4rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  background: var(--bg);
+  color: var(--muted);
+}
+.tag.accent {
+  color: var(--accent);
+}
+.progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.progress > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.error-text {
+  color: var(--err);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+pre.cmd {
+  margin: 0.4rem 0;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

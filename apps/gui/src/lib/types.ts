@@ -60,6 +60,14 @@ export interface Metrics {
 }
 
 // Mirrors crates/contio-core/src/model.rs (ModelStatus, state flattened).
+export type ModelKind = "chat" | "embedding" | "reranker";
+
+export interface ModelOrigin {
+  catalog?: string;
+  repo?: string;
+  quant?: string;
+}
+
 export type ModelState =
   | { state: "stopped" }
   | { state: "loading" }
@@ -69,9 +77,183 @@ export type ModelState =
 export type ModelStatus = {
   id: string;
   device: DeviceKind;
+  kind: ModelKind;
+  context: number | null;
+  /** Installed through contio (removable); false for config.toml models. */
+  managed: boolean;
+  origin: ModelOrigin | null;
   pool: MemoryPoolKind;
   backend: string | null;
   pinned: boolean;
   estimated_bytes: number | null;
   in_flight: number;
 } & ModelState;
+
+// Mirrors crates/contiod/src/catalog_api.rs.
+export type Verdict = "fits" | "tight" | "too_big";
+
+export interface Fit {
+  verdict: Verdict;
+  needed_bytes: number;
+  budget_bytes: number;
+}
+
+export interface QuantView {
+  label: string;
+  size: number;
+  files: number;
+  bits_per_weight: number | null;
+  tier: string | null;
+  fit: { gpu: Fit | null; cpu: Fit | null };
+  recommended: boolean;
+  downloaded: boolean;
+  installed: string[];
+}
+
+export interface NpuView {
+  tag: string;
+  name: string;
+  footprint_bytes: number | null;
+  default_context: number | null;
+  capabilities: string[];
+  single_turn: boolean;
+  unsupported: boolean;
+  fit: Fit | null;
+  downloaded: boolean;
+  installed: string[];
+}
+
+export interface RepoFile {
+  path: string;
+  size: number;
+  sha256: string | null;
+}
+
+export interface ModelDetail {
+  id: string | null;
+  name: string;
+  family: string;
+  repo: string | null;
+  kind: ModelKind;
+  params: number | null;
+  active_b: number | null;
+  context_length: number | null;
+  default_context: number;
+  capabilities: string[];
+  notes: string | null;
+  recommended: string | null;
+  quants: QuantView[];
+  mmproj: RepoFile | null;
+  npu: NpuView[];
+  error: string | null;
+}
+
+export interface ModelSummary {
+  id: string;
+  name: string;
+  family: string;
+  repo: string | null;
+  kind: ModelKind;
+  params: number | null;
+  active_b: number | null;
+  capabilities: string[];
+  default_context: number;
+  quant_count: number;
+  min_size: number | null;
+  max_size: number | null;
+  suggested: QuantView | null;
+  npu: string[];
+  installed: string[];
+  error: string | null;
+}
+
+export interface Family {
+  id: string;
+  name: string;
+  vendor: string;
+  license: string;
+  summary: string;
+}
+
+export interface CatalogOverview {
+  families: Family[];
+  models: ModelSummary[];
+  npu_available: boolean;
+}
+
+export interface RepoInfo {
+  repo: string;
+  downloads: number;
+  likes: number;
+  pipeline: string | null;
+  arch: string | null;
+  params: number | null;
+  context_length: number | null;
+  tools: boolean;
+  reasoning: boolean;
+  gated: boolean;
+}
+
+export interface InstallModelRequest {
+  model?: string;
+  repo?: string;
+  quant?: string;
+  flm?: string;
+  device?: DeviceKind;
+  context?: number;
+  id?: string;
+  no_vision?: boolean;
+  load?: boolean;
+}
+
+// Mirrors crates/contio-install/src/jobs.rs.
+export type JobState = "running" | "done" | "failed" | "cancelled";
+
+export interface Job {
+  id: number;
+  kind: string;
+  title: string;
+  state: JobState;
+  step: string | null;
+  progress: { done: number; total: number | null } | null;
+  error: string | null;
+  result: Record<string, unknown> | null;
+  started_at: number;
+  finished_at: number | null;
+  log: string[];
+  spec: unknown | null;
+  retried_as: number | null;
+}
+
+// Backends and settings (install_api.rs, registry.rs).
+export type InstallMethod = "source" | "prebuilt" | "podman";
+export type BackendId = "llama.cpp" | "flm";
+
+export interface InstalledBackend {
+  backend: BackendId;
+  method: InstallMethod;
+  version: string;
+  dir: string;
+  bin_dir: string | null;
+  image: string | null;
+  prefix: string | null;
+  installed_at: number;
+}
+
+export interface Settings {
+  llamacpp_method: InstallMethod;
+  flm_method: InstallMethod;
+}
+
+export interface BackendsInfo {
+  registered: string[];
+  installed: InstalledBackend[];
+  defaults: Record<BackendId, string>;
+  settings: Settings;
+}
+
+export interface PreflightResult {
+  ok: boolean;
+  install_hint: string | null;
+  preflight: { missing_packages: string[]; missing_tools: string[]; notes: string[] };
+}

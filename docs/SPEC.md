@@ -338,7 +338,7 @@ contio serve                            # run daemon in foreground
 
 **M0: done.** Spikes in `docs/spikes/` (NPU, GPU/CPU, GUI). ROCm and the `performance` profile are still open.
 
-**M1: in progress** (branch `m1-core`):
+**M1: done** (merged to `main`):
 - [x] Cargo workspace (§3): `contio-core`, `contio-hw`, `contio-backends`, `contiod`, `apps/gui`
 - [x] `Backend` trait with **llama.cpp** (GPU/CPU) and **FastFlowLM** (NPU) adapters. FLM env is built explicitly.
 - [x] `ModelManager`: on-demand load, **per-pool budgets with LRU eviction**, pinned models, idle TTL, request leases (no eviction mid-stream), crash detection, ordered shutdown. Tested against real child processes (`contio-fake-backend`).
@@ -355,10 +355,25 @@ contio serve                            # run daemon in foreground
 - [x] Backend installers with preflight (`dnf install` hint): llama.cpp **source** (Vulkan, ~2 min), **prebuilt** (GitHub release, sha256 digest, smoke test), **podman** (nearest available `server-vulkan-bN` image); FastFlowLM **source**. Installs are discovered at startup and registered live after install.
 - [x] Verified end-to-end in an isolated data dir: all four install paths, download cancel/resume, GPU/CPU chat on each llama.cpp runtime (incl. inside the container), NPU chat + embeddings on a contio-installed FLM.
 
-**Known gaps / M2 candidates**
-- Downloaded models still have to be added to `config.toml` by hand (the job prints the snippet); the catalog (§4) will register them.
-- Jobs are in memory only (downloads resume from `.part` files after a restart); persistence → SQLite.
-- GUI has no jobs/install views yet (CLI only).
+**M2: in progress** (branch `m2-catalog`):
+- [x] Curated catalog (`registry/catalog.toml`): 47 models in 13 families (chat, vision, code, embeddings, rerankers). Every GGUF quant of each repo is listed live from Hugging Face (cached 24 h on disk, stale cache used offline); draft/MTP heads, imatrix files and incomplete shard sets are filtered out.
+- [x] Fit estimator: weights + projector + KV cache (exact per-token geometry from the GGUF headers in `registry/geometry.json`: sliding-window, hybrid linear attention, MLA, shared-KV layers) + compute buffers against each pool's budget → fits / tight / too big. Bits per weight and a quality tier per quant.
+- [x] NPU catalog from FastFlowLM's `model_list.json` (XDNA2 entries), linked to curated models where they match; FLM-only models in their own family.
+- [x] Hugging Face search for any GGUF repo ("community", conservative KV estimate).
+- [x] One-step install (`POST /api/catalog/install`, `contio install`, GUI): installs a missing backend with the method from settings (llama.cpp default: prebuilt), downloads all shards + vision projector with resume and sha256, registers the model, optionally starts it. Re-installing the same files is idempotent.
+- [x] Models added through the API persist (`models.json`), can be changed (`PATCH`: context, pinning, device, TTL) and removed (optionally deleting files inside contio's model dir). `config.toml` models are fixed and win on id clashes.
+- [x] Model kinds: embedding (`--embedding`) and reranker (`--reranking`, `/v1/rerank`); vision via `--mmproj` (also mounted for Podman). FLM embedding models run standalone on the NPU; FLM serializes several NPU processes itself.
+- [x] Jobs persist (`jobs.json`, last 100); jobs cut off by a restart resume automatically (downloads continue from `.part`); failed jobs can be retried.
+- [x] GUI: navigation; Catalog (filters, family groups, fit badges, Hugging Face search, detail dialog with quant/device picker and install); Jobs (progress, logs, cancel/retry); Backends (setup wizard: method choice saved as the default, prerequisite check with copyable `dnf` command, install); model removal on the dashboard. Deep link `/catalog?model=<id>`.
+- [x] CLI: `search [--hf]`, `show`, `install`, `rm`, `set`, `retry`, `backends [install]`.
+- [x] Verified on the Framework 13 in an isolated data dir: catalog/vision/embedding/reranker/NPU installs, chat + vision answer, kill -9 during a download → resumed after restart, fresh machine without backends → llama.cpp installed automatically, SDK end-to-end test (11/11).
+- [ ] whisper.cpp backend (speech; FLM's whisper is listed but not served yet)
+- [ ] Profile editor in the GUI (context/pinning/device; API and CLI exist), aliases through the API
+- [ ] Fit badges recomputed when the context is changed in the install dialog (currently shown at the default context)
+- [ ] Playground (chat + tool-call inspector)
+
+**Known gaps / M3 candidates**
+- NPU models have no memory estimate yet (FLM's `footprint` is shown in the catalog but not used for pool budgeting).
 - Shallow source builds of llama.cpp report version `b1`, so the llama-server web UI asset isn't fetched (the API is unaffected).
 - llama.cpp Vulkan on gfx1150 runs flash attention over K/V on the CPU ("missing support" warning). Benchmarked: `--flash-attn on` is still +9% prefill at 4k tokens, so it stays the default.
 - Podman containers use the daemon's `XDG_DATA_HOME` storage (a custom value isolates them from the user's default storage).

@@ -1,24 +1,16 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import {
-    DAEMON_URL,
-    fetchHardware,
-    formatBytes,
-    profileLabel,
-    subscribeMetrics,
-    type ConnectionState,
-  } from "$lib/daemon";
+  import { DAEMON_URL, fetchHardware, formatBytes, profileLabel } from "$lib/daemon";
+  import { live } from "$lib/live.svelte";
   import ModelList from "$lib/components/ModelList.svelte";
-  import type { HardwareInfo, MemoryPool, Metrics } from "$lib/types";
+  import type { HardwareInfo, MemoryPool } from "$lib/types";
 
   let hw = $state<HardwareInfo | null>(null);
   let hwError = $state<string | null>(null);
-  let metrics = $state<Metrics | null>(null);
-  let conn = $state<ConnectionState>("connecting");
 
   // Live pools win over the startup snapshot.
-  let pools = $derived<MemoryPool[]>(metrics?.pools ?? hw?.pools ?? []);
-  let power = $derived(metrics?.power ?? hw?.power ?? null);
+  let pools = $derived<MemoryPool[]>(live.metrics?.pools ?? hw?.pools ?? []);
+  let power = $derived(live.metrics?.power ?? hw?.power ?? null);
+  let metrics = $derived(live.metrics);
 
   async function loadHardware() {
     hwError = null;
@@ -29,32 +21,18 @@
     }
   }
 
-  onMount(() => {
-    loadHardware();
-    return subscribeMetrics(
-      (m) => (metrics = m),
-      (s) => {
-        conn = s;
-        if (s === "open" && !hw) loadHardware();
-      },
-    );
+  $effect(() => {
+    if (live.online && !hw) loadHardware();
   });
 
   const poolLabel = { gpu: "GPU pool (VRAM)", system: "System pool (CPU / NPU)" } as const;
   const pct = (p: MemoryPool) => (p.total_bytes ? (100 * p.used_bytes) / p.total_bytes : 0);
 </script>
 
-<main>
-  <header>
-    <h1>contio</h1>
-    <span class="conn {conn}" title={DAEMON_URL}>
-      {conn === "open" ? "connected" : conn === "connecting" ? "connecting…" : "daemon offline"}
-    </span>
-  </header>
-
-  {#if hwError && !hw}
+<div class="page">
+  {#if !live.online && !hw}
     <section class="card error">
-      <p>Can't reach <code>contiod</code> at <code>{DAEMON_URL}</code>: {hwError}</p>
+      <p>Can't reach <code>contiod</code> at <code>{DAEMON_URL}</code>{hwError ? `: ${hwError}` : ""}.</p>
       <p>Start it with <code>cargo run -p contiod</code>.</p>
       <button onclick={loadHardware}>Retry</button>
     </section>
@@ -77,7 +55,7 @@
       {/each}
     </section>
 
-    <ModelList online={conn === "open"} />
+    <ModelList online={live.online} />
 
     <section class="stats">
       <div class="card stat">
@@ -137,48 +115,19 @@
       <h2>API</h2>
       <dl>
         <dt>OpenAI</dt>
-        <dd><code>{DAEMON_URL}/v1</code> <span class="sub">chat, completions, responses, embeddings</span></dd>
+        <dd><code>{DAEMON_URL}/v1</code> <span class="sub">chat, completions, responses, embeddings, rerank</span></dd>
         <dt>Anthropic</dt>
         <dd><code>{DAEMON_URL}</code> <span class="sub">messages</span></dd>
       </dl>
       <p class="sub">Use any API key; use a model id or alias as the model name. Models load on first request.</p>
     </section>
   {/if}
-</main>
+</div>
 
 <style>
-  main {
-    max-width: 760px;
-    margin: 0 auto;
-    padding: 1.25rem;
+  .page {
     display: grid;
     gap: 1rem;
-  }
-  header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-  }
-  h1 {
-    margin: 0;
-    font-size: 1.5rem;
-  }
-  .conn {
-    font-size: 0.85rem;
-    color: var(--muted);
-  }
-  .conn::before {
-    content: "●";
-    margin-right: 0.35rem;
-  }
-  .conn.open::before {
-    color: var(--ok);
-  }
-  .conn.connecting::before {
-    color: var(--warn);
-  }
-  .conn.closed::before {
-    color: var(--err);
   }
   .error {
     border-color: var(--err);
@@ -220,9 +169,6 @@
     font-size: 1.4rem;
     font-weight: 600;
   }
-  .num {
-    font-variant-numeric: tabular-nums;
-  }
   .warn {
     color: var(--warn);
     margin-left: 0.5rem;
@@ -238,9 +184,5 @@
   }
   dd {
     margin: 0;
-  }
-  button {
-    font: inherit;
-    padding: 0.35rem 0.9rem;
   }
 </style>
