@@ -1,6 +1,7 @@
-//! llama.cpp `llama-server` (GGUF on GPU via Vulkan, or CPU).
+//! llama.cpp `llama-server` (GGUF on GPU via Vulkan, or CPU), run natively or
+//! in a Podman container.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use contio_core::hw::DeviceKind;
 use contio_core::model::{ModelProfile, ModelSource};
@@ -8,10 +9,17 @@ use tokio::process::Command;
 
 use crate::{Backend, BackendError, estimate_from_weights};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlamaRuntime {
+    /// Directory containing `llama-server` (a Vulkan build also serves CPU).
+    Native { bin_dir: PathBuf },
+    /// A llama.cpp server image (entrypoint `llama-server`), run with `podman run`.
+    Podman { image: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct LlamaCppConfig {
-    /// Directory containing `llama-server` (a Vulkan build also serves CPU).
-    pub bin_dir: PathBuf,
+    pub runtime: LlamaRuntime,
     /// Threads for CPU inference (physical cores work best, see m0-gpu.md).
     pub cpu_threads: Option<u32>,
 }
@@ -33,14 +41,13 @@ impl LlamaCppBackend {
         }
     }
 
-    /// Arguments after the binary; separated out for testing.
-    fn args(&self, profile: &ModelProfile, port: u16) -> Vec<String> {
-        let path = Self::gguf_path(profile).expect("supports() checked the format");
+    /// `llama-server` arguments; `model` and `host` differ between runtimes.
+    fn args(&self, profile: &ModelProfile, port: u16, model: &str, host: &str) -> Vec<String> {
         let mut a: Vec<String> = vec![
             "--model".into(),
-            path.display().to_string(),
+            model.to_owned(),
             "--host".into(),
-            "127.0.0.1".into(),
+            host.to_owned(),
             "--port".into(),
             port.to_string(),
             "--alias".into(),
@@ -65,6 +72,43 @@ impl LlamaCppBackend {
         a.extend(profile.extra_args.iter().cloned());
         a
     }
+
+    /// `podman run` arguments: model directory mounted read-only at /models,
+    /// port published on localhost only, GPU via /dev/dri.
+    fn podman_args(&self, image: &str, profile: &ModelProfile, port: u16, model: &Path) -> Vec<String> {
+        let dir = model.parent().unwrap_or(Path::new("/")).display().to_string();
+        let file = model.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let name: String =
+            profile.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+        let mut a: Vec<String> = vec![
+            "run".into(),
+            "--rm".into(),
+            "--name".into(),
+            format!("contio-{name}-{port}"),
+            // Fedora: SELinux would block /dev/dri and the bind mount otherwise
+            "--security-opt".into(),
+            "label=disable".into(),
+            "--publish".into(),
+            format!("127.0.0.1:{port}:{port}"),
+            "--volume".into(),
+            format!("{dir}:/models:ro"),
+        ];
+        if profile.device == DeviceKind::Gpu {
+            a.extend(["--device".into(), "/dev/dri".into()]);
+        }
+        a.push(image.to_owned());
+        a.extend(self.args(profile, port, &format!("/models/{file}"), "0.0.0.0"));
+        a
+    }
+}
+
+/// First `name` on `$PATH`.
+pub(crate) fn find_in_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")?
+        .to_str()?
+        .split(':')
+        .map(|d| Path::new(d).join(name))
+        .find(|p| p.is_file())
 }
 
 impl Backend for LlamaCppBackend {
@@ -72,23 +116,39 @@ impl Backend for LlamaCppBackend {
         "llama.cpp"
     }
 
+    fn describe(&self) -> String {
+        match &self.config.runtime {
+            LlamaRuntime::Native { bin_dir } => format!("llama.cpp (native: {})", bin_dir.display()),
+            LlamaRuntime::Podman { image } => format!("llama.cpp (podman: {image})"),
+        }
+    }
+
     fn supports(&self, profile: &ModelProfile) -> bool {
         Self::gguf_path(profile).is_some() && matches!(profile.device, DeviceKind::Gpu | DeviceKind::Cpu)
     }
 
     fn command(&self, profile: &ModelProfile, port: u16) -> Result<Command, BackendError> {
-        let bin = self.config.bin_dir.join("llama-server");
-        if !bin.is_file() {
-            return Err(BackendError::MissingBinary(bin));
-        }
-        if let Some(path) = Self::gguf_path(profile)
-            && !path.is_file()
-        {
+        let path = Self::gguf_path(profile).ok_or_else(|| BackendError::Unsupported(profile.id.clone()))?;
+        if !path.is_file() {
             return Err(BackendError::MissingModelFile(path.clone()));
         }
-        let mut cmd = Command::new(bin);
-        cmd.args(self.args(profile, port));
-        Ok(cmd)
+        match &self.config.runtime {
+            LlamaRuntime::Native { bin_dir } => {
+                let bin = bin_dir.join("llama-server");
+                if !bin.is_file() {
+                    return Err(BackendError::MissingBinary(bin));
+                }
+                let mut cmd = Command::new(bin);
+                cmd.args(self.args(profile, port, &path.display().to_string(), "127.0.0.1"));
+                Ok(cmd)
+            }
+            LlamaRuntime::Podman { image } => {
+                let podman = find_in_path("podman").ok_or_else(|| BackendError::MissingBinary("podman".into()))?;
+                let mut cmd = Command::new(podman);
+                cmd.args(self.podman_args(image, profile, port, path));
+                Ok(cmd)
+            }
+        }
     }
 
     fn health_path(&self) -> &'static str {
@@ -122,12 +182,19 @@ mod tests {
     }
 
     fn backend() -> LlamaCppBackend {
-        LlamaCppBackend::new(LlamaCppConfig { bin_dir: "/nonexistent".into(), cpu_threads: Some(12) })
+        LlamaCppBackend::new(LlamaCppConfig {
+            runtime: LlamaRuntime::Native { bin_dir: "/nonexistent".into() },
+            cpu_threads: Some(12),
+        })
+    }
+
+    fn native_args(p: &ModelProfile) -> String {
+        backend().args(p, 40001, "/m/q.gguf", "127.0.0.1").join(" ")
     }
 
     #[test]
     fn gpu_args() {
-        let a = backend().args(&profile(DeviceKind::Gpu), 40001).join(" ");
+        let a = native_args(&profile(DeviceKind::Gpu));
         assert!(a.starts_with("--model /m/q.gguf --host 127.0.0.1 --port 40001 --alias qwen3-8b --jinja"));
         assert!(a.contains("--ctx-size 16384"));
         assert!(a.contains("--n-gpu-layers 999"));
@@ -137,7 +204,7 @@ mod tests {
 
     #[test]
     fn cpu_args_disable_gpu_and_set_threads() {
-        let a = backend().args(&profile(DeviceKind::Cpu), 1).join(" ");
+        let a = native_args(&profile(DeviceKind::Cpu));
         assert!(a.contains("--n-gpu-layers 0 --device none --threads 12"));
     }
 
@@ -152,8 +219,29 @@ mod tests {
     }
 
     #[test]
-    fn missing_binary_is_reported() {
+    fn missing_files_are_reported() {
         let err = backend().command(&profile(DeviceKind::Gpu), 1).unwrap_err();
-        assert!(matches!(err, BackendError::MissingBinary(_)));
+        assert!(matches!(err, BackendError::MissingModelFile(_)), "{err}");
+
+        let model = tempfile::NamedTempFile::new().unwrap();
+        let mut p = profile(DeviceKind::Gpu);
+        p.source = ModelSource::Gguf { path: model.path().into() };
+        let err = backend().command(&p, 1).unwrap_err();
+        assert!(matches!(err, BackendError::MissingBinary(_)), "{err}");
+    }
+
+    #[test]
+    fn podman_args_mount_model_and_publish_localhost() {
+        let mut p = profile(DeviceKind::Gpu);
+        p.id = "qwen3.6:35b".into();
+        let a = backend()
+            .podman_args("ghcr.io/ggml-org/llama.cpp:server-vulkan", &p, 40001, Path::new("/data/gguf/q.gguf"))
+            .join(" ");
+        assert!(a.starts_with("run --rm --name contio-qwen3-6-35b-40001 --security-opt label=disable"));
+        assert!(a.contains("--publish 127.0.0.1:40001:40001 --volume /data/gguf:/models:ro --device /dev/dri"));
+        assert!(a.contains("ghcr.io/ggml-org/llama.cpp:server-vulkan --model /models/q.gguf --host 0.0.0.0 --port 40001"));
+
+        let cpu = backend().podman_args("img", &profile(DeviceKind::Cpu), 1, Path::new("/m/q.gguf")).join(" ");
+        assert!(!cpu.contains("/dev/dri"));
     }
 }

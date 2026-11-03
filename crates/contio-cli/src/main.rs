@@ -52,6 +52,45 @@ enum Command {
         #[arg(long)]
         show_reasoning: bool,
     },
+    /// Download a GGUF from Hugging Face (verified, resumable; HF_TOKEN for gated
+    /// repos), or a FastFlowLM NPU model with --flm.
+    Pull {
+        /// e.g. unsloth/Qwen3-8B-GGUF
+        #[arg(required_unless_present = "flm")]
+        repo: Option<String>,
+        /// e.g. Qwen3-8B-Q4_K_M.gguf
+        #[arg(required_unless_present = "flm")]
+        file: Option<String>,
+        /// FastFlowLM tag instead, e.g. qwen3-it:4b
+        #[arg(long, conflicts_with_all = ["repo", "file"])]
+        flm: Option<String>,
+        #[arg(long, default_value = "main")]
+        revision: String,
+        /// Start the job and return immediately.
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Install a backend: llama.cpp (source | prebuilt | podman) or flm (source).
+    Install {
+        #[arg(value_parser = ["llama.cpp", "flm"])]
+        backend: String,
+        #[arg(long, value_parser = ["source", "prebuilt", "podman"])]
+        method: String,
+        /// Release tag / commit [default: the version tested by contio]
+        #[arg(long)]
+        version: Option<String>,
+        /// Only check prerequisites.
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Registered and installed backends.
+    Backends,
+    /// Background jobs (downloads, installs).
+    Jobs,
+    /// Cancel a running job.
+    Cancel { id: u64 },
 }
 
 #[tokio::main]
@@ -124,6 +163,49 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             client.chat(&model, system.as_deref(), &prompt, max_tokens, show_reasoning).await?;
         }
+        Command::Pull { repo, file, flm, revision, detach } => {
+            let body = match flm {
+                Some(tag) => json!({"flm": tag}),
+                None => json!({"repo": repo, "file": file, "revision": revision}),
+            };
+            let r = client.post("/api/models/download", &body).await?;
+            let job = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await?;
+            if let Some(result) = job.filter(|_| !cli.json) {
+                if let Some(path) = result["path"].as_str() {
+                    eprintln!("saved to {path}");
+                }
+                eprintln!("\nadd to ~/.config/contio/config.toml and restart contiod:\n");
+                println!("{}", result["config_snippet"].as_str().unwrap_or_default());
+            }
+        }
+        Command::Install { backend, method, version, check, detach } => {
+            let pf = client.get(&format!("/api/backends/preflight?backend={backend}&method={method}")).await?;
+            if check || pf["ok"] != true {
+                println!("{}", format::preflight(&pf));
+                if pf["ok"] != true {
+                    bail!("prerequisites missing");
+                }
+                return Ok(());
+            }
+            let r = client
+                .post("/api/backends/install", &json!({"backend": backend, "method": method, "version": version}))
+                .await?;
+            if client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await?.is_some() {
+                eprintln!("installed and registered; models using {backend} can be loaded now");
+            }
+        }
+        Command::Backends => {
+            let raw = client.get("/api/backends").await?;
+            if cli.json { println!("{raw}") } else { println!("{}", format::backends(&raw)) }
+        }
+        Command::Jobs => {
+            let raw = client.get("/api/jobs").await?;
+            if cli.json { println!("{raw}") } else { println!("{}", format::jobs(&raw)) }
+        }
+        Command::Cancel { id } => {
+            let r = client.post(&format!("/api/jobs/{id}/cancel"), &json!({})).await?;
+            eprintln!("{}", if r["cancelled"] == true { "cancellation requested" } else { "job is not running" });
+        }
     }
     Ok(())
 }
@@ -148,6 +230,39 @@ impl Client {
             .await
             .with_context(|| self.unreachable())?;
         Self::json(res).await
+    }
+
+    /// Show a job's progress until it ends. Returns its result on success.
+    /// Ctrl-C only stops watching; the job keeps running in the daemon.
+    async fn follow(&self, id: u64, detach: bool) -> anyhow::Result<Option<Value>> {
+        eprintln!("job {id} started (`contio jobs` to check, `contio cancel {id}` to stop)");
+        if detach {
+            return Ok(None);
+        }
+        let mut last_log = 0usize;
+        loop {
+            let job = self.get(&format!("/api/jobs/{id}")).await?;
+            let log = job["log"].as_array().cloned().unwrap_or_default();
+            if log.len() < last_log {
+                last_log = 0; // ring buffer wrapped
+            }
+            for line in &log[last_log..] {
+                eprintln!("\r\x1b[K\x1b[2m  {}\x1b[0m", line.as_str().unwrap_or_default());
+            }
+            last_log = log.len();
+            eprint!("\r\x1b[K{}", format::job_line(&job));
+            match job["state"].as_str() {
+                Some("running") => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+                Some("done") => {
+                    eprintln!();
+                    return Ok(Some(job["result"].clone()));
+                }
+                _ => {
+                    eprintln!();
+                    bail!("{}", job["error"].as_str().unwrap_or("job failed"));
+                }
+            }
+        }
     }
 
     fn unreachable(&self) -> String {

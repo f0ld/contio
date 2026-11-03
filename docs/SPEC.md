@@ -350,4 +350,15 @@ contio serve                            # run daemon in foreground
 - [x] Responses API (incl. streaming, function calls, `previous_response_id` via in-memory store) + Anthropic Messages (incl. streaming, tool use/results, thinking blocks, `count_tokens` estimate). Verified with the official OpenAI and Anthropic Python SDKs (`scripts/e2e/sdk_test.py`).
 - [x] Gateway guards: identical consecutive tool calls collapsed (non-stream + stream; streamed tool calls are buffered until the end), `response_format` validated (non-stream), reported under a `contio` response field
 - [x] Model aliases (`[[aliases]]`), including `upstream_model` to address FLM's co-loaded embedding model under its own name
-- [ ] Installers for backends (source/prebuilt/podman, §6) and model downloads with sha256 + single-writer lock
+- [x] Background jobs (`contio-install`): progress, logs, cancellation, one writer per target (duplicate requests join the running job)
+- [x] Model downloads: Hugging Face GGUF with resume (HTTP Range) + sha256 (`x-linked-etag`), gated repos via `HF_TOKEN`; FastFlowLM models via `flm pull`
+- [x] Backend installers with preflight (`dnf install` hint): llama.cpp **source** (Vulkan, ~2 min), **prebuilt** (GitHub release, sha256 digest, smoke test), **podman** (nearest available `server-vulkan-bN` image); FastFlowLM **source**. Installs are discovered at startup and registered live after install.
+- [x] Verified end-to-end in an isolated data dir: all four install paths, download cancel/resume, GPU/CPU chat on each llama.cpp runtime (incl. inside the container), NPU chat + embeddings on a contio-installed FLM.
+
+**Known gaps / M2 candidates**
+- Downloaded models still have to be added to `config.toml` by hand (the job prints the snippet); the catalog (§4) will register them.
+- Jobs are in memory only (downloads resume from `.part` files after a restart); persistence → SQLite.
+- GUI has no jobs/install views yet (CLI only).
+- Shallow source builds of llama.cpp report version `b1`, so the llama-server web UI asset isn't fetched (the API is unaffected).
+- llama.cpp Vulkan on gfx1150 runs flash attention over K/V on the CPU ("missing support" warning). Benchmarked: `--flash-attn on` is still +9% prefill at 4k tokens, so it stays the default.
+- Podman containers use the daemon's `XDG_DATA_HOME` storage (a custom value isolates them from the user's default storage).

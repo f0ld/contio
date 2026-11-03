@@ -10,7 +10,13 @@ idle_ttl_secs = 900                # unload unpinned models idle this long (0 = 
 startup_timeout_secs = 180
 reserve_percent = 10               # share of each memory pool kept free
 
+# Backends: either install them with contio (no config needed; used automatically):
+#   contio install llama.cpp --method source|prebuilt|podman
+#   contio install flm --method source
+# or point at existing installs here (takes precedence over installed ones).
+
 # llama.cpp: GGUF on GPU (Vulkan) or CPU. A Vulkan build serves both.
+# Set exactly one of bin_dir (native) or image (podman).
 [backends.llamacpp]
 bin_dir = "~/.local/share/contio-spike/src/llama.cpp/build-vulkan/bin"
 cpu_threads = 12                   # physical cores

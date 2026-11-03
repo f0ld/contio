@@ -13,13 +13,15 @@ publish = false
 contio-core = { path = "crates/contio-core" }
 contio-hw = { path = "crates/contio-hw" }
 contio-backends = { path = "crates/contio-backends" }
+contio-install = { path = "crates/contio-install" }
 
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
+sha2 = "0.11"
 nix = { version = "0.31", features = ["signal"] }
-reqwest = { version = "0.13", default-features = false, features = ["stream", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"

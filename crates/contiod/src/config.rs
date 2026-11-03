@@ -62,10 +62,12 @@ pub struct BackendsSection {
     pub flm: Option<FlmSection>,
 }
 
+/// Set exactly one of `bin_dir` (native) or `image` (Podman).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LlamaCppSection {
-    pub bin_dir: PathBuf,
+    pub bin_dir: Option<PathBuf>,
+    pub image: Option<String>,
     pub cpu_threads: Option<u32>,
 }
 
@@ -103,7 +105,12 @@ impl Config {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let expand = |p: &mut PathBuf| *p = expand_tilde(p, home.as_deref());
         if let Some(l) = &mut c.backends.llamacpp {
-            expand(&mut l.bin_dir);
+            if l.bin_dir.is_some() == l.image.is_some() {
+                bail!("[backends.llamacpp] needs exactly one of `bin_dir` or `image`");
+            }
+            if let Some(d) = &mut l.bin_dir {
+                expand(d);
+            }
         }
         if let Some(f) = &mut c.backends.flm {
             expand(&mut f.prefix);
@@ -144,6 +151,11 @@ fn expand_tilde(p: &Path, home: Option<&Path>) -> PathBuf {
 /// `$XDG_CONFIG_HOME/contio/config.toml`, defaulting to `~/.config`.
 pub fn default_config_path() -> PathBuf {
     xdg_dir("XDG_CONFIG_HOME", ".config").join("contio/config.toml")
+}
+
+/// `$XDG_DATA_HOME/contio`, defaulting to `~/.local/share`: models, backends.
+pub fn default_data_dir() -> PathBuf {
+    xdg_dir("XDG_DATA_HOME", ".local/share").join("contio")
 }
 
 /// `$XDG_STATE_HOME/contio/logs`, defaulting to `~/.local/state`.
@@ -212,7 +224,7 @@ upstream_model = "embed-gemma:300m"
         assert_eq!(c.manager.idle_ttl_secs, 600);
         assert_eq!(c.manager.reserve_percent, 10);
         let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-        assert_eq!(c.backends.llamacpp.unwrap().bin_dir, home.join("llama.cpp/build-vulkan/bin"));
+        assert_eq!(c.backends.llamacpp.unwrap().bin_dir, Some(home.join("llama.cpp/build-vulkan/bin")));
         let flm = c.backends.flm.unwrap();
         assert_eq!(flm.xrt_dir, PathBuf::from("/opt/xilinx/xrt"));
         assert!(flm.embed);
@@ -253,5 +265,6 @@ upstream_model = "embed-gemma:300m"
         let dup = "[[models]]\nid='a'\nformat='flm'\ntag='x'\ndevice='npu'\n".repeat(2);
         assert!(Config::parse(&dup).unwrap_err().to_string().contains("duplicate"));
         assert!(Config::parse("[manager]\nidle_ttl = 5\n").is_err(), "unknown keys must fail");
+        assert!(Config::parse("[backends.llamacpp]\ncpu_threads = 4\n").is_err(), "needs bin_dir or image");
     }
 }

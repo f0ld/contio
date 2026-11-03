@@ -118,6 +118,81 @@ pub fn hardware(hw: &HardwareInfo) -> String {
     s
 }
 
+pub fn job_line(job: &Value) -> String {
+    let title = job["title"].as_str().unwrap_or_default();
+    let step = job["step"].as_str().unwrap_or("");
+    let progress = match (job["progress"]["done"].as_u64(), job["progress"]["total"].as_u64()) {
+        (Some(d), Some(t)) if t > 0 => format!(" {:>5.1}% ({} / {})", 100.0 * d as f64 / t as f64, gib(d), gib(t)),
+        (Some(d), _) => format!(" {}", gib(d)),
+        _ => String::new(),
+    };
+    let state = job["state"].as_str().unwrap_or("?");
+    format!("[{state}] {title}: {step}{progress}")
+}
+
+pub fn jobs(raw: &Value) -> String {
+    let jobs = raw.as_array().cloned().unwrap_or_default();
+    if jobs.is_empty() {
+        return "no jobs".into();
+    }
+    jobs.iter()
+        .map(|j| {
+            let mut line = format!("{:>3}  {}", j["id"], job_line(j));
+            if let Some(e) = j["error"].as_str() {
+                let _ = write!(line, "\n     error: {}", e.lines().next().unwrap_or_default());
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn backends(raw: &Value) -> String {
+    let mut s = String::new();
+    let registered: Vec<&str> = raw["registered"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+    if registered.is_empty() {
+        s.push_str("registered: none\n");
+    } else {
+        s.push_str("registered (first match wins):\n");
+        for r in &registered {
+            let _ = writeln!(s, "  {r}");
+        }
+    }
+    let installed = raw["installed"].as_array().cloned().unwrap_or_default();
+    if installed.is_empty() {
+        s.push_str("installed:  none (try `contio install llama.cpp --method prebuilt`)");
+    } else {
+        s.push_str("installed:");
+        for b in installed {
+            let at = b["bin_dir"].as_str().or(b["image"].as_str()).or(b["prefix"].as_str()).unwrap_or("?");
+            let _ = write!(s, "\n  {} {} ({})  {at}", b["backend"].as_str().unwrap_or("?"), b["version"].as_str().unwrap_or("?"), b["method"].as_str().unwrap_or("?"));
+        }
+    }
+    s
+}
+
+pub fn preflight(raw: &Value) -> String {
+    if raw["ok"] == true {
+        return "all prerequisites present".into();
+    }
+    let p = &raw["preflight"];
+    let mut lines = Vec::new();
+    let list = |v: &Value| v.as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_owned)).collect::<Vec<_>>();
+    let pkgs = list(&p["missing_packages"]);
+    if !pkgs.is_empty() {
+        lines.push(format!("missing packages: {}", pkgs.join(", ")));
+    }
+    let tools = list(&p["missing_tools"]);
+    if !tools.is_empty() {
+        lines.push(format!("missing tools: {}", tools.join(", ")));
+    }
+    lines.extend(list(&p["notes"]));
+    if let Some(h) = raw["install_hint"].as_str() {
+        lines.push(format!("\nrun:  {h}"));
+    }
+    lines.join("\n")
+}
+
 fn pool_bar(p: &MemoryPool) -> String {
     const WIDTH: usize = 24;
     let frac = if p.total_bytes == 0 { 0.0 } else { p.used_bytes as f64 / p.total_bytes as f64 };
@@ -177,6 +252,23 @@ mod tests {
         assert!(lines[1].contains("ready :4242") && lines[1].ends_with("pinned"));
         assert!(lines[2].contains("failed: boom") && !lines[2].contains("more"));
         assert!(lines[1].contains("24.0 GiB"));
+    }
+
+    #[test]
+    fn job_lines() {
+        let j = serde_json::json!({"title": "x/y.gguf", "state": "running", "step": "downloading",
+                                   "progress": {"done": 512u64 * 1024 * 1024, "total": 1024u64 * 1024 * 1024}});
+        assert_eq!(job_line(&j), "[running] x/y.gguf: downloading  50.0% (0.5 GiB / 1.0 GiB)");
+        let failed = serde_json::json!([{"id": 3, "title": "t", "state": "failed", "error": "boom\nmore"}]);
+        assert!(jobs(&failed).contains("error: boom") && !jobs(&failed).contains("more"));
+    }
+
+    #[test]
+    fn preflight_hint() {
+        let raw = serde_json::json!({"ok": false, "install_hint": "sudo dnf install glslc",
+                                     "preflight": {"missing_packages": ["glslc"], "missing_tools": [], "notes": []}});
+        let t = preflight(&raw);
+        assert!(t.contains("missing packages: glslc") && t.ends_with("run:  sudo dnf install glslc"));
     }
 
     #[test]

@@ -27,6 +27,7 @@ const GUI_ORIGINS: [&str; 4] = [
 ];
 
 use crate::config::Alias;
+use crate::install_api::{self, Installer};
 use crate::gateway;
 
 #[derive(Clone)]
@@ -39,12 +40,19 @@ pub struct AppState {
     pub aliases: Arc<HashMap<String, Alias>>,
     /// Conversations for the Responses API's `previous_response_id`.
     pub responses: gateway::responses::Store,
+    pub installer: Installer,
 }
 
 impl AppState {
     /// Starts a background sampler that refreshes metrics every `interval`.
     /// All WebSocket clients share this one sampler.
-    pub fn start(probe: HwProbe, manager: ModelManager, aliases: Vec<Alias>, interval: Duration) -> Self {
+    pub fn start(
+        probe: HwProbe,
+        manager: ModelManager,
+        aliases: Vec<Alias>,
+        installer: Installer,
+        interval: Duration,
+    ) -> Self {
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
         tokio::spawn(async move {
@@ -71,6 +79,7 @@ impl AppState {
             http: reqwest::Client::new(),
             aliases: Arc::new(aliases.into_iter().map(|a| (a.name.clone(), a)).collect()),
             responses: gateway::responses::Store::default(),
+            installer,
         }
     }
 }
@@ -87,6 +96,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/models", get(model_statuses))
         .route("/api/models/{id}/load", post(load_model))
         .route("/api/models/{id}/unload", post(unload_model))
+        .route("/api/models/download", post(install_api::download_model))
+        .route("/api/jobs", get(install_api::list_jobs))
+        .route("/api/jobs/{id}", get(install_api::get_job))
+        .route("/api/jobs/{id}/cancel", post(install_api::cancel_job))
+        .route("/api/backends", get(install_api::list_backends))
+        .route("/api/backends/preflight", get(install_api::preflight))
+        .route("/api/backends/install", post(install_api::install_backend))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat))
         .route("/v1/completions", post(gateway::passthrough))
@@ -183,7 +199,7 @@ mod tests {
             vec![],
             vec![],
         );
-        AppState::start(probe, manager, vec![], Duration::from_secs(60))
+        AppState::start(probe, manager, vec![], Installer::new(std::env::temp_dir(), 4), Duration::from_secs(60))
     }
 
     fn fixture() -> tempfile::TempDir {

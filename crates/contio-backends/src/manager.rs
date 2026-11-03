@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use contio_core::hw::MemoryPoolKind;
@@ -33,7 +33,7 @@ pub struct ModelManager {
 
 struct Inner {
     config: ManagerConfig,
-    backends: Vec<Arc<dyn Backend>>,
+    backends: RwLock<Vec<Arc<dyn Backend>>>,
     profiles: Vec<ModelProfile>,
     slots: Mutex<HashMap<String, Slot>>,
     /// Serializes loads/unloads/evictions; requests to running models never wait on it.
@@ -86,7 +86,7 @@ impl ModelManager {
         Self {
             inner: Arc::new(Inner {
                 config,
-                backends,
+                backends: RwLock::new(backends),
                 profiles,
                 slots: Mutex::new(HashMap::new()),
                 ops: tokio::sync::Mutex::new(()),
@@ -98,6 +98,18 @@ impl ModelManager {
 
     pub fn profiles(&self) -> &[ModelProfile] {
         &self.inner.profiles
+    }
+
+    /// Register a backend at runtime (e.g. right after it was installed).
+    /// It takes precedence over existing backends for the formats it supports.
+    pub fn add_backend(&self, backend: Arc<dyn Backend>) {
+        tracing::info!(backend = %backend.describe(), "backend registered");
+        self.inner.backends.write().expect("backends lock poisoned").insert(0, backend);
+    }
+
+    /// Descriptions of the registered backends, in priority order.
+    pub fn backend_names(&self) -> Vec<String> {
+        self.inner.backends.read().expect("backends lock poisoned").iter().map(|b| b.describe()).collect()
     }
 
     /// Get a lease on a running instance of `id`, loading it (and evicting
@@ -262,6 +274,8 @@ impl ModelManager {
     fn backend_for(&self, profile: &ModelProfile) -> Result<Arc<dyn Backend>, BackendError> {
         self.inner
             .backends
+            .read()
+            .expect("backends lock poisoned")
             .iter()
             .find(|b| b.supports(profile))
             .cloned()

@@ -5,6 +5,7 @@
 mod api;
 mod config;
 mod gateway;
+mod install_api;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -14,8 +15,11 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use contio_backends::{Backend, FlmBackend, FlmConfig, LlamaCppBackend, LlamaCppConfig, ManagerConfig, ModelManager};
+use contio_backends::{
+    Backend, FlmBackend, FlmConfig, LlamaCppBackend, LlamaCppConfig, LlamaRuntime, ManagerConfig, ModelManager,
+};
 use contio_core::hw::HardwareInfo;
+use contio_install::BackendKind;
 use contio_hw::HwProbe;
 use tracing_subscriber::EnvFilter;
 
@@ -65,7 +69,9 @@ async fn main() -> anyhow::Result<()> {
         "hardware detected"
     );
 
+    let installer = install_api::Installer::new(config::default_data_dir(), hw.cpu.cores);
     let manager = build_manager(&config, &hw);
+    register_installed_backends(&config, &manager, &installer);
     tracing::info!(models = manager.profiles().len(), "model registry loaded");
     let reaper = {
         let m = manager.clone();
@@ -82,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
         probe,
         manager.clone(),
         config.aliases.clone(),
+        installer,
         Duration::from_millis(args.metrics_interval_ms),
     );
     let listener = tokio::net::TcpListener::bind(listen)
@@ -103,10 +110,12 @@ async fn main() -> anyhow::Result<()> {
 fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
     let mut backends: Vec<Arc<dyn Backend>> = Vec::new();
     if let Some(l) = &config.backends.llamacpp {
-        backends.push(Arc::new(LlamaCppBackend::new(LlamaCppConfig {
-            bin_dir: l.bin_dir.clone(),
-            cpu_threads: l.cpu_threads,
-        })));
+        let runtime = match (&l.bin_dir, &l.image) {
+            (Some(bin_dir), _) => LlamaRuntime::Native { bin_dir: bin_dir.clone() },
+            (None, Some(image)) => LlamaRuntime::Podman { image: image.clone() },
+            (None, None) => unreachable!("validated in Config::parse"),
+        };
+        backends.push(Arc::new(LlamaCppBackend::new(LlamaCppConfig { runtime, cpu_threads: l.cpu_threads })));
     }
     if let Some(f) = &config.backends.flm {
         backends.push(Arc::new(FlmBackend::new(FlmConfig {
@@ -115,9 +124,6 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
             xrt_dir: f.xrt_dir.clone(),
             embed: f.embed,
         })));
-    }
-    if backends.is_empty() && !config.models.is_empty() {
-        tracing::warn!("models are configured but no [backends.*] section is; nothing can be loaded");
     }
 
     let keep = 100 - u64::from(config.manager.reserve_percent);
@@ -133,4 +139,32 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
         backends,
         config.models.clone(),
     )
+}
+
+/// Backends installed by contio (`contio install …`) are used for any kind
+/// the config doesn't set explicitly. Newest install wins.
+fn register_installed_backends(config: &Config, manager: &ModelManager, installer: &install_api::Installer) {
+    let configured = |k: BackendKind| match k {
+        BackendKind::LlamaCpp => config.backends.llamacpp.is_some(),
+        BackendKind::Flm => config.backends.flm.is_some(),
+    };
+    let mut done = Vec::new();
+    for installed in contio_install::discover(&installer.data_dir) {
+        if configured(installed.backend) || done.contains(&installed.backend) {
+            continue;
+        }
+        if let Some(b) = install_api::backend_from_installed(&installed, installer) {
+            tracing::info!(
+                backend = installed.backend.dir_name(),
+                version = %installed.version,
+                method = ?installed.method,
+                "using installed backend"
+            );
+            manager.add_backend(b);
+            done.push(installed.backend);
+        }
+    }
+    if manager.backend_names().is_empty() && !manager.profiles().is_empty() {
+        tracing::warn!("models are configured but no backend is (config or `contio install`); nothing can be loaded");
+    }
 }

@@ -58,6 +58,17 @@ impl FlmBackend {
         a
     }
 
+    /// `flm` with contio's environment, for other subcommands (e.g. `pull`).
+    pub fn flm_command(&self) -> Result<Command, BackendError> {
+        let bin = self.config.prefix.join("bin/flm");
+        if !bin.is_file() {
+            return Err(BackendError::MissingBinary(bin));
+        }
+        let mut cmd = Command::new(bin);
+        cmd.envs(self.env());
+        Ok(cmd)
+    }
+
     fn env(&self) -> Vec<(&'static str, String)> {
         let c = &self.config;
         let share = c.prefix.join("share/flm");
@@ -81,17 +92,17 @@ impl Backend for FlmBackend {
         "FastFlowLM"
     }
 
+    fn describe(&self) -> String {
+        format!("FastFlowLM ({})", self.config.prefix.display())
+    }
+
     fn supports(&self, profile: &ModelProfile) -> bool {
         Self::tag(profile).is_some() && profile.device == DeviceKind::Npu
     }
 
     fn command(&self, profile: &ModelProfile, port: u16) -> Result<Command, BackendError> {
-        let bin = self.config.prefix.join("bin/flm");
-        if !bin.is_file() {
-            return Err(BackendError::MissingBinary(bin));
-        }
-        let mut cmd = Command::new(bin);
-        cmd.args(self.args(profile, port)).envs(self.env());
+        let mut cmd = self.flm_command()?;
+        cmd.args(self.args(profile, port));
         Ok(cmd)
     }
 

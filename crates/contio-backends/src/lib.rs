@@ -18,13 +18,18 @@ use tokio::process::Command;
 
 pub use flm::{FlmBackend, FlmConfig};
 pub use instance::Instance;
-pub use llamacpp::{LlamaCppBackend, LlamaCppConfig};
+pub use llamacpp::{LlamaCppBackend, LlamaCppConfig, LlamaRuntime};
 pub use manager::{Lease, ManagerConfig, ModelManager};
 
 /// Knows how to launch one kind of inference server.
 pub trait Backend: Send + Sync {
     /// Human-readable name, e.g. `llama.cpp`.
     fn name(&self) -> &'static str;
+
+    /// Name plus how it runs, e.g. `llama.cpp (podman: <image>)`.
+    fn describe(&self) -> String {
+        self.name().to_owned()
+    }
 
     /// Whether this backend can run the profile (format + device).
     fn supports(&self, profile: &ModelProfile) -> bool;
