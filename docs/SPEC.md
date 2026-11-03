@@ -144,7 +144,9 @@ trait Backend {
 
 ### 5.2 CPU and GPU via llama.cpp (primary engine, v1)
 - **CPU**: llama.cpp built with AVX-512 / Zen 5 flags. Options: thread count and core affinity (prefer the Zen 5 cores), mlock, mmap.
-- **GPU**: llama.cpp **Vulkan (RADV)** as the default, because it is the most reliable on gfx1150. **ROCm/HIP** is an optional second GPU backend that is benchmarked against Vulkan.
+- **GPU**: llama.cpp **Vulkan (RADV)** as the default (verified in M0: builds in ~3 min, fastest device on every model tested). **ROCm/HIP** is an optional second GPU backend that is benchmarked against Vulkan.
+- **Default device policy (from M0, [`docs/spikes/m0-gpu.md`](spikes/m0-gpu.md))**: GPU for chat/agentic models (MoE models like Qwen3.6 35B-A3B are the sweet spot). NPU for embeddings, Whisper, and small helper models, so the GPU stays free. CPU for overflow and small models. Speed estimates use measured numbers keyed by power profile. The **power profile is a speed/energy dial**: in M0, balanced (~25 W cap) gave +40% prefill vs power saver (~15 W cap) at +57% J/token on the GPU. contio exposes this as a user choice ("quiet / efficient" vs "fast") instead of hiding it.
+- **Build preflight (Vulkan)**: `cmake`, `ninja-build`, `gcc-c++`, `vulkan-headers`, `vulkan-loader-devel`, `glslc`, `spirv-headers-devel`. Missing packages are shown as one `dnf install` line before the build starts.
 - **Unified memory**: the iGPU uses the BIOS VRAM carve-out (currently 64 GB) plus GTT, which is borrowed from system RAM. contio detects the current limits and, if needed, **shows** the user how to raise them (e.g. `amdgpu`/`ttm` kernel params). It does **not** silently change system config.
 - **Install strategy (decided: user-selectable)**: the first-run setup wizard asks the user to choose, and Settings → Backends lets them change it later, per backend:
   - **Build from source**: compiled in the background with Zen 5 / Vulkan / ROCm flags. Best performance, one-time ~5 min build. *Suggested default in the wizard.*
@@ -157,16 +159,16 @@ trait Backend {
 ### 5.2b Speech via whisper.cpp
 - **whisper.cpp** (CPU / Vulkan) as a separate backend behind the same `Backend` trait, with the same three install methods. GGML Whisper models (tiny → large-v3-turbo, quantized variants) are part of the catalog.
 
-### 5.3 NPU (XDNA 2): highest-risk area ⚠️
-NPU LLM support on Linux is young and changes quickly. The candidates are:
-
-| Option | What it is | Pros | Cons |
-|---|---|---|---|
-| **FastFlowLM (FLM)** | NPU-native LLM runtime with an OpenAI-ish server | Fast, NPU-only, simple CLI/server | Own model format, limited model list, licensing to check |
-| **Lemonade Server** (AMD) | OpenAI-compatible server over llama.cpp + OGA + FLM | Supports NPU and Hybrid (NPU prefill + iGPU decode) | Python stack; Linux NPU support still maturing |
-| **ONNX Runtime GenAI + Ryzen AI SW** | AMD's official stack | Official, hybrid mode | Heavy install, Linux support/version churn |
-
-Plan: **Milestone 0 spike** to verify which of these works on Fedora 44 / kernel 7.2 with the installed `amdxdna` + `/opt/xilinx` XRT. **Decided:** in v1 the NPU catalog is a **small curated subset** (only models pre-converted for the chosen runtime, e.g. small chat models and embeddings). The GUI must make this limit clear instead of hiding it. **Hybrid** (NPU prefill + GPU decode) is a **post-v1 goal** (M5+), and the `DeviceKind::Hybrid` variant exists from the start so it can be added without breaking anything.
+### 5.3 NPU (XDNA 2) via FastFlowLM
+**Decided after the M0 spike** (details: [`docs/spikes/m0-npu.md`](spikes/m0-npu.md)):
+- The system stack is verified working: in-tree `amdxdna`, firmware 1.1.2.64, XRT 2.27, `xrt-smi validate` passes (47 TOPS).
+- **Runtime: FastFlowLM (FLM)**, spawned as `flm serve <tag> --port N --ctx-len N --pmode …`. It has an OpenAI-compatible API with streaming, tools, JSON schema, embeddings, and audio transcriptions. Lemonade's Linux NPU path is FLM underneath, so it is not used. ONNX Runtime GenAI is not used in v1.
+- **Install**: source build via FLM's `home_install.sh` into contio's prefix (no sudo). Models go in `FLM_MODEL_PATH`. Pinned FLM version per contio release.
+- **Catalog**: imported from FLM's `model_list.json` (~70 tags, incl. Qwen3/3.5/3.6-MoE-35B, gpt-oss-20b, Gemma 4, embeddings, Whisper). `*-flash` (1k ctx, single-turn) tags are hidden from agentic presets.
+- **NPU scheduling**: one `flm serve` process = one LLM + optional co-loaded embedding model (`--embed 1`). Several FLM processes can coexist; the NPU lock is taken per request, so parallel requests share throughput.
+- **NPU role (from M0 measurements)**: good decode speed for ≤4B at ~13–15 W, but slow prefill (130–450 tok/s for 4B+, 10–35 s TTFT at 4.5k tokens). Default use: embeddings, Whisper, small helper models, battery-mode chat. **Not the default for agentic coding models** (GPU instead, pending the GPU spike).
+- **License**: FLM runtime is MIT; NPU kernels are closed but free for any use and redistributable unmodified. Credit "Powered by FastFlowLM".
+- **Hybrid** (NPU prefill + GPU decode) stays a **post-v1 goal**, and the `DeviceKind::Hybrid` variant exists from the start so it can be added without breaking anything.
 
 ### 5.4 Later backends (post-v1, behind the same trait)
 - **mistral.rs** (Rust-native; useful for an in-process option).
@@ -181,7 +183,7 @@ When the user selects **Model X / Quant Y / Device Z** and clicks **Install & Ru
 
 1. **Preflight**: hardware probe, check driver/permission requirements (render group, `/dev/accel` access, memlock ulimit for the NPU), fit check, disk space check.
 2. **Backend install** if missing: download or build, verify checksum, smoke test (`--version` plus a tiny model load).
-3. **Model download**: parallel chunked HTTP from HF with resume, sha256 verification, optional HF token for gated models.
+3. **Model download**: parallel chunked HTTP from HF with resume, **sha256 verification against the HF `lfs.oid`** (mismatch → delete and retry), optional HF token for gated models. **One writer per artifact**: a download job takes a lock on the target file, and a second request for the same artifact joins the running job (M0: two concurrent writers corrupted a `.part` file).
 4. **Config generation**: a launch profile (ctx size, batch, threads, KV cache quant, flash-attn, GPU layers, chat template).
 5. **Health check**: spawn the backend, run a test completion, register the model under its API name.
 6. **Done**: notification. The model is now served at `/v1`.
@@ -217,6 +219,8 @@ Every API surface can be toggled in **Settings → API**. **Default: all three e
 - **Memory-aware eviction**: the manager keeps a **separate budget per memory pool** (GPU pool, system pool) and unloads LRU or idle models in the pool that needs space (idle TTL per model). Split models count against both pools.
 - **Pinning**: mark models as "always loaded".
 - **Multiple models at once (decided)**: e.g. a coder model on the GPU, an embedding model on the NPU, and a small model on the CPU. Loads that would exceed the budget trigger eviction first, or are refused with a clear error if pinned models block them.
+- **Tool-call loop guard**: N identical consecutive tool calls in one response (M0: Qwen3.6 repeated the same call 7×) are collapsed to one and logged. Configurable.
+- **Structured-output validation**: `response_format` results are validated against the schema, and violations are reported (engines don't always enforce it).
 - Concurrency: per-model request queue, plus a configurable number of parallel slots (`--parallel` in llama.cpp).
 
 ### 7.3 Security
@@ -236,20 +240,22 @@ Per (model, quant, device, backend, settings):
 - **Generation** tok/s
 - **TTFT** (time to first token)
 - **Peak memory** (RSS + GPU GTT/VRAM)
-- **Power & energy**: package power via hwmon / `amd_pmf` / RAPL → **joules per token** (important on battery)
+- **Power & energy**: SoC package power via the amdgpu hwmon `PPT` sensor (readable without root; RAPL needs root), battery `current_now × voltage_now` on battery → **joules per token** (important on battery)
 - **Concurrency**: throughput with N parallel requests
-- Run conditions are recorded (AC vs battery, power profile, temperature, backend version) so results stay comparable.
+- Run conditions are recorded (AC vs battery, power profile, temperature, backend version) so results stay comparable. The power profile **matters a lot**: in M0, *power saver* capped the whole SoC at ~15 W, so device comparisons were power-bound. The runner can switch the profile for the run (and restore it), and results from different profiles are never shown as directly comparable.
 
 ### 8.2 Quality benchmarks
 - **Decided: all four areas**, each as a small, fast subset with a fixed seed so results are reproducible:
   - **Coding**: HumanEval / MBPP style. Generated code runs **only in podman sandboxes** (no network, CPU/memory/time limits).
-  - **Tool calling**: BFCL-style single, parallel, and multi-turn function calls, checked via the real API path, so chat-template bugs show up. This is the most important area for agentic use.
+  - **Tool calling**: BFCL-style single, parallel, and multi-turn function calls, checked via the real API path, so chat-template bugs show up. This is the most important area for agentic use. It gates an **"agent-ready" badge per (model, backend)**: engine labels aren't trusted (M0: an FLM model labelled tool-calling hallucinated a tool result instead).
   - **Reasoning / math**: GSM8K / MATH subsets.
   - **General knowledge**: MMLU-Pro subset.
 - Other model types: embedding retrieval (small MTEB-style subset), reranker ranking quality, and Whisper word error rate on a small audio set.
 - **Custom prompt sets**: user-defined YAML with expected answers or regex/JSON-schema checks.
 - **Side-by-side arena**: the same prompt sent to 2–4 models, with blind voting stored as Elo.
 - Optional LLM-as-judge using another local (or remote) model.
+- **Repetition**: `temperature: 0` is not deterministic on GPU backends (M0), so each quality item runs N times (default 3) and is reported as a pass rate.
+- **Budgets**: tool-call and structured-output tests allow ≥ 2048 tokens so thinking models can finish reasoning. A separate "thinking off" variant is tested where the model supports it.
 
 ### 8.3 Results
 - Stored in SQLite and exportable as CSV/JSON.
@@ -321,7 +327,7 @@ contio serve                            # run daemon in foreground
 | 3 | API surfaces | **Chat Completions + Responses + Anthropic Messages**, each toggleable, all on by default |
 | 4 | Concurrency | **Multiple models at once**, memory-aware eviction **per pool** |
 | 5 | Memory | 128 GB unified. Currently 64 GB GPU carve-out and 64 GB system. Pools are detected at runtime |
-| 6 | NPU | Curated model list in v1, **hybrid NPU+GPU post-v1** |
+| 6 | NPU | **FastFlowLM** runtime; catalog imported from FLM's model list; single-slot scheduling; **hybrid NPU+GPU post-v1** |
 | 7 | Quality benchmarks | **Coding, tool calling, reasoning/math, general knowledge**. Code runs in podman sandboxes |
 | 8 | Network | **Localhost by default**, LAN opt-in that requires an API key |
 | 9 | Root actions | **Copy-able commands in v1**, polkit helper with a fixed allowlist post-v1 |
@@ -329,6 +335,6 @@ contio serve                            # run daemon in foreground
 | 11 | Packaging | **Dev builds now**, RPM + systemd user unit later |
 
 ## 13. Next Steps
-1. M0 spikes: NPU runtime on Fedora 44, Vulkan vs ROCm on gfx1150, minimal Tauri + Svelte shell talking to a stub daemon.
+1. M0 spikes: ~~NPU runtime on Fedora 44~~ (done, `docs/spikes/m0-npu.md`), ~~GPU/CPU via llama.cpp Vulkan~~ (done in power saver + balanced, `docs/spikes/m0-gpu.md`; ROCm + `performance` open), minimal Tauri + Svelte shell talking to a stub daemon.
 2. Detail specs per area: catalog schema + registry TOML format, `Backend`/`BackendInstaller` traits, management API (OpenAPI), benchmark result schema.
 3. Scaffold the Cargo workspace (§3).
