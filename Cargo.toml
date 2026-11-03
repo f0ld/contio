@@ -12,15 +12,20 @@ publish = false
 [workspace.dependencies]
 contio-core = { path = "crates/contio-core" }
 contio-hw = { path = "crates/contio-hw" }
+contio-backends = { path = "crates/contio-backends" }
 
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+nix = { version = "0.31", features = ["signal"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "process", "sync", "fs", "io-util"] }
+toml = "1"
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

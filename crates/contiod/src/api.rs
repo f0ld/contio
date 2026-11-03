@@ -1,14 +1,15 @@
 //! HTTP surface of the daemon: management API (`/api/*`) and the
-//! OpenAI-compatible gateway (`/v1/*`, stubbed until backends land in M1).
+//! OpenAI-compatible gateway (`/v1/*`, see `gateway.rs`).
 
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use contio_backends::ModelManager;
 use contio_core::hw::{HardwareInfo, Metrics};
 use contio_hw::HwProbe;
 use serde_json::json;
@@ -23,16 +24,21 @@ const GUI_ORIGINS: [&str; 4] = [
     "http://tauri.localhost",
 ];
 
+use crate::gateway;
+
 #[derive(Clone)]
 pub struct AppState {
     pub probe: HwProbe,
     pub metrics: watch::Receiver<Option<Metrics>>,
+    pub manager: ModelManager,
+    /// Client for backend requests (no overall timeout: generations can be long).
+    pub http: reqwest::Client,
 }
 
 impl AppState {
     /// Starts a background sampler that refreshes metrics every `interval`.
     /// All WebSocket clients share this one sampler.
-    pub fn start(probe: HwProbe, interval: Duration) -> Self {
+    pub fn start(probe: HwProbe, manager: ModelManager, interval: Duration) -> Self {
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
         tokio::spawn(async move {
@@ -52,7 +58,7 @@ impl AppState {
                 }
             }
         });
-        Self { probe, metrics: rx }
+        Self { probe, metrics: rx, manager, http: reqwest::Client::new() }
     }
 }
 
@@ -65,7 +71,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/hw", get(hardware))
         .route("/api/events", get(events))
-        .route("/v1/models", get(models))
+        .route("/api/models", get(model_statuses))
+        .route("/api/models/{id}/load", post(load_model))
+        .route("/api/models/{id}/unload", post(unload_model))
+        .route("/v1/models", get(gateway::models))
+        .route("/v1/chat/completions", post(gateway::proxy))
+        .route("/v1/completions", post(gateway::proxy))
+        .route("/v1/embeddings", post(gateway::proxy))
         .layer(cors)
         .with_state(state)
 }
@@ -83,9 +95,27 @@ async fn hardware(State(state): State<AppState>) -> Response {
     }
 }
 
-/// OpenAI `GET /v1/models`. Empty until the model registry exists.
-async fn models() -> Json<serde_json::Value> {
-    Json(json!({ "object": "list", "data": [] }))
+async fn model_statuses(State(state): State<AppState>) -> Response {
+    Json(state.manager.statuses()).into_response()
+}
+
+/// Load (or keep) a model without sending a request; returns its status.
+async fn load_model(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.manager.acquire(&id).await {
+        Ok(lease) => {
+            drop(lease);
+            let status = state.manager.statuses().into_iter().find(|s| s.id == id);
+            Json(status).into_response()
+        }
+        Err(e) => gateway::backend_error(&e),
+    }
+}
+
+async fn unload_model(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.manager.unload(&id).await {
+        Ok(unloaded) => Json(json!({ "unloaded": unloaded })).into_response(),
+        Err(e) => gateway::backend_error(&e),
+    }
 }
 
 /// Live metrics stream: one JSON `Metrics` message per sample.
@@ -126,6 +156,20 @@ mod tests {
 
     use super::*;
 
+    fn state(probe: HwProbe) -> AppState {
+        let manager = ModelManager::new(
+            contio_backends::ManagerConfig {
+                log_dir: std::env::temp_dir(),
+                startup_timeout: Duration::from_secs(1),
+                default_idle_ttl: None,
+                pool_budgets: Default::default(),
+            },
+            vec![],
+            vec![],
+        );
+        AppState::start(probe, manager, Duration::from_secs(60))
+    }
+
     fn fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("proc")).unwrap();
@@ -144,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn serves_health_hw_and_models() {
         let dir = fixture();
-        let app = router(AppState::start(HwProbe::new(dir.path()), Duration::from_secs(60)));
+        let app = router(state(HwProbe::new(dir.path())));
 
         let (s, body) = get_json(app.clone(), "/api/health").await;
         assert_eq!(s, StatusCode::OK);
@@ -155,15 +199,42 @@ mod tests {
         assert_eq!(body["cpu"]["model"], "Test CPU");
         assert_eq!(body["pools"][0]["kind"], "system");
 
-        let (s, body) = get_json(app, "/v1/models").await;
+        let (s, body) = get_json(app.clone(), "/v1/models").await;
         assert_eq!(s, StatusCode::OK);
         assert_eq!(body["object"], "list");
+
+        let (s, body) = get_json(app, "/api/models").await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body, serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn gateway_rejects_bad_requests_in_openai_shape() {
+        let dir = fixture();
+        let app = router(state(HwProbe::new(dir.path())));
+        let post_json = |body: &'static str| {
+            Request::post("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        for (body, status, kind) in [
+            ("not json", StatusCode::BAD_REQUEST, "invalid_request_error"),
+            (r#"{"messages":[]}"#, StatusCode::BAD_REQUEST, "invalid_request_error"),
+            (r#"{"model":"nope","messages":[]}"#, StatusCode::NOT_FOUND, "model_not_found"),
+        ] {
+            let res = app.clone().oneshot(post_json(body)).await.unwrap();
+            assert_eq!(res.status(), status, "{body}");
+            let v: serde_json::Value =
+                serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+            assert_eq!(v["error"]["type"], kind, "{body}");
+        }
     }
 
     #[tokio::test]
     async fn hw_probe_failure_is_a_json_error() {
         let dir = tempfile::tempdir().unwrap(); // no procfs at all
-        let app = router(AppState::start(HwProbe::new(dir.path()), Duration::from_secs(60)));
+        let app = router(state(HwProbe::new(dir.path())));
         let (s, body) = get_json(app, "/api/hw").await;
         assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(body["error"]["message"].as_str().unwrap().contains("cpuinfo"));
@@ -172,7 +243,7 @@ mod tests {
     #[tokio::test]
     async fn cors_allows_gui_origin_only() {
         let dir = fixture();
-        let app = router(AppState::start(HwProbe::new(dir.path()), Duration::from_secs(60)));
+        let app = router(state(HwProbe::new(dir.path())));
         for (origin, allowed) in [("tauri://localhost", true), ("http://evil.example", false)] {
             let res = app
                 .clone()

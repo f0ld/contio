@@ -5,3 +5,4 @@
 //! beyond small conveniences.
 
 pub mod hw;
+pub mod model;

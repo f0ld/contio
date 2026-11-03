@@ -1,0 +1,27 @@
+[package]
+name = "contio-backends"
+description = "Inference backends (llama.cpp, FastFlowLM), process lifecycle and the model manager"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+contio-core.workspace = true
+nix.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# Std-only stand-in for llama-server used by the integration tests.
+[[bin]]
+name = "contio-fake-backend"
+path = "src/bin/contio-fake-backend.rs"
+test = false
+
+[lints]
+workspace = true

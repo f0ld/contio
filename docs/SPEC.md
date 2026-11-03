@@ -334,7 +334,20 @@ contio serve                            # run daemon in foreground
 | 10 | Model types in v1 | **Chat LLMs, embeddings, rerankers, vision (VLM), speech (Whisper)** |
 | 11 | Packaging | **Dev builds now**, RPM + systemd user unit later |
 
-## 13. Next Steps
-1. M0 spikes: ~~NPU runtime on Fedora 44~~ (done, `docs/spikes/m0-npu.md`), ~~GPU/CPU via llama.cpp Vulkan~~ (done in power saver + balanced, `docs/spikes/m0-gpu.md`; ROCm + `performance` open), ~~minimal Tauri + Svelte shell talking to a stub daemon~~ (done, `docs/spikes/m0-gui.md`).
-2. Detail specs per area: catalog schema + registry TOML format, `Backend`/`BackendInstaller` traits, management API (OpenAPI), benchmark result schema.
-3. Scaffold the Cargo workspace (§3).
+## 13. Status & Next Steps
+
+**M0: done.** Spikes in `docs/spikes/` (NPU, GPU/CPU, GUI). ROCm and the `performance` profile are still open.
+
+**M1: in progress** (branch `m1-core`):
+- [x] Cargo workspace (§3): `contio-core`, `contio-hw`, `contio-backends`, `contiod`, `apps/gui`
+- [x] `Backend` trait with **llama.cpp** (GPU/CPU) and **FastFlowLM** (NPU) adapters. FLM env is built explicitly.
+- [x] `ModelManager`: on-demand load, **per-pool budgets with LRU eviction**, pinned models, idle TTL, request leases (no eviction mid-stream), crash detection, ordered shutdown. Tested against real child processes (`contio-fake-backend`).
+- [x] Gateway: `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` with SSE passthrough, `/v1/models`, OpenAI-shaped errors. Management: `/api/models`, `/api/models/{id}/load|unload`.
+- [x] Config file registry (`docs/config.example.toml`) until the catalog exists.
+- [x] Verified end-to-end on the Framework 13: GPU (Qwen3.6 35B-A3B), CPU (Llama 1B), and NPU (Qwen3 4B + co-loaded embeddings) served at the same time. Tool calls and streaming work through the gateway.
+- [ ] `contio` CLI on the management API
+- [ ] GUI: model list with load/unload and status
+- [ ] Responses API + Anthropic Messages translation (§7.1)
+- [ ] Gateway guards: tool-call loop collapse, `response_format` validation (§7.2)
+- [ ] FLM embedding model as its own model id (today it is reached through the co-loaded LLM's id)
+- [ ] Installers for backends (source/prebuilt/podman, §6) and model downloads with sha256 + single-writer lock

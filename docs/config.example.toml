@@ -1,0 +1,47 @@
+# contio daemon config: copy to ~/.config/contio/config.toml
+# Until the catalog/installer exists (M2), models are registered here by hand.
+# Paths may start with "~/".
+
+[server]
+listen = "127.0.0.1:8080"          # keep on localhost; the API has no auth yet
+
+[manager]
+idle_ttl_secs = 900                # unload unpinned models idle this long (0 = never)
+startup_timeout_secs = 180
+reserve_percent = 10               # share of each memory pool kept free
+
+# llama.cpp: GGUF on GPU (Vulkan) or CPU. A Vulkan build serves both.
+[backends.llamacpp]
+bin_dir = "~/.local/share/contio-spike/src/llama.cpp/build-vulkan/bin"
+cpu_threads = 12                   # physical cores
+
+# FastFlowLM: NPU (XDNA2). The env is set by contio; flm_env.sh is not used.
+[backends.flm]
+prefix = "~/.local/share/contio-spike/flm"
+model_path = "~/.local/share/contio-spike/models"
+# xrt_dir = "/opt/xilinx/xrt"
+embed = true                       # co-load embed-gemma next to each NPU LLM
+
+# Agentic default: MoE on the GPU (docs/spikes/m0-gpu.md).
+[[models]]
+id = "qwen3.6-35b-a3b"
+format = "gguf"
+path = "~/.local/share/contio-spike/gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
+device = "gpu"
+context = 32768
+# pinned = true
+# extra_args = ["--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]
+
+[[models]]
+id = "qwen3-8b-cpu"
+format = "gguf"
+path = "~/.local/share/contio-spike/gguf/Qwen3-8B-Q4_K_M.gguf"
+device = "cpu"
+context = 8192
+
+[[models]]
+id = "qwen3-4b-npu"
+format = "flm"
+tag = "qwen3-it:4b"
+device = "npu"
+context = 8192
