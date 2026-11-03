@@ -1,20 +1,26 @@
 //! Background jobs with progress, logs and cancellation (spec §6).
 //!
-//! Jobs live in memory; downloads resume from their `.part` files after a
-//! restart, so nothing is lost except the job record (persistence: M2).
+//! With [`Jobs::persistent`] the job list is kept in a JSON file. Each job can
+//! carry the request that started it (`spec`), so jobs cut off by a daemon
+//! restart can be started again; downloads then resume from their `.part`
+//! files.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const LOG_LINES: usize = 200;
+/// Finished jobs kept in the history file.
+const HISTORY: usize = 100;
+pub const INTERRUPTED: &str = "interrupted by a daemon restart";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobState {
     Running,
@@ -23,13 +29,13 @@ pub enum JobState {
     Cancelled,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
     pub done: u64,
     pub total: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobInfo {
     pub id: u64,
     pub kind: String,
@@ -44,6 +50,12 @@ pub struct JobInfo {
     pub finished_at: Option<u64>,
     /// Last lines of tool output (builds, podman pull).
     pub log: VecDeque<String>,
+    /// The request that started the job, to retry or resume it.
+    #[serde(default)]
+    pub spec: Option<Value>,
+    /// Set when this job was retried/resumed as another job.
+    #[serde(default)]
+    pub retried_as: Option<u64>,
     #[serde(skip)]
     key: Option<String>,
 }
@@ -58,6 +70,10 @@ struct Inner {
     jobs: Mutex<BTreeMap<u64, JobInfo>>,
     cancel: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     next: AtomicU64,
+    /// Where the job list is saved; `None` keeps it in memory only.
+    store: Option<PathBuf>,
+    /// One writer of the store file at a time.
+    saving: Mutex<()>,
 }
 
 /// Handed to a running job to report progress and observe cancellation.
@@ -66,6 +82,8 @@ pub struct JobCtx {
     id: u64,
     jobs: Jobs,
     cancelled: Arc<AtomicBool>,
+    /// Prepended to step names, e.g. `[2/3] ` for multi-file downloads.
+    prefix: Option<Arc<str>>,
 }
 
 fn now() -> u64 {
@@ -73,10 +91,60 @@ fn now() -> u64 {
 }
 
 impl Jobs {
+    /// Jobs saved to `path`. Returns the jobs that were still running when the
+    /// daemon stopped (now marked failed with [`INTERRUPTED`]) so the caller
+    /// can start them again from their `spec`.
+    pub fn persistent(path: PathBuf) -> (Self, Vec<JobInfo>) {
+        let mut jobs: BTreeMap<u64, JobInfo> = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice::<Vec<JobInfo>>(&bytes)
+                .map(|v| v.into_iter().map(|j| (j.id, j)).collect())
+                .unwrap_or_else(|e| {
+                    tracing::warn!("ignoring unreadable job history {}: {e}", path.display());
+                    BTreeMap::new()
+                }),
+            Err(_) => BTreeMap::new(),
+        };
+        let mut interrupted = Vec::new();
+        for j in jobs.values_mut().filter(|j| j.state == JobState::Running) {
+            j.state = JobState::Failed;
+            j.error = Some(INTERRUPTED.into());
+            j.finished_at = Some(now());
+            interrupted.push(j.clone());
+        }
+        let next = jobs.keys().max().copied().unwrap_or(0);
+        let me = Self {
+            inner: Arc::new(Inner {
+                jobs: Mutex::new(jobs),
+                cancel: Default::default(),
+                next: AtomicU64::new(next),
+                store: Some(path),
+                saving: Mutex::new(()),
+            }),
+        };
+        me.save();
+        (me, interrupted)
+    }
+
     /// Start `work` as a job. If `key` is set and a running job has the same
     /// key (e.g. the same download target), that job's id is returned instead,
     /// so there is never more than one writer per target.
     pub fn spawn<F, Fut>(&self, kind: &str, title: &str, key: Option<String>, work: F) -> u64
+    where
+        F: FnOnce(JobCtx) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Value, String>> + Send + 'static,
+    {
+        self.spawn_with_spec(kind, title, key, None, work)
+    }
+
+    /// [`Self::spawn`], remembering the request (`spec`) for retries.
+    pub fn spawn_with_spec<F, Fut>(
+        &self,
+        kind: &str,
+        title: &str,
+        key: Option<String>,
+        spec: Option<Value>,
+        work: F,
+    ) -> u64
     where
         F: FnOnce(JobCtx) -> Fut + Send + 'static,
         Fut: Future<Output = Result<Value, String>> + Send + 'static,
@@ -104,14 +172,17 @@ impl Jobs {
                     started_at: now(),
                     finished_at: None,
                     log: VecDeque::new(),
+                    spec,
+                    retried_as: None,
                     key,
                 },
             );
             id
         };
+        self.save();
         let cancelled = Arc::new(AtomicBool::new(false));
         self.inner.cancel.lock().expect("cancel map poisoned").insert(id, cancelled.clone());
-        let ctx = JobCtx { id, jobs: self.clone(), cancelled: cancelled.clone() };
+        let ctx = JobCtx { id, jobs: self.clone(), cancelled: cancelled.clone(), prefix: None };
         let jobs = self.clone();
         tracing::info!(id, kind, title, "job started");
         tokio::spawn(async move {
@@ -138,8 +209,38 @@ impl Jobs {
             }
             drop(map);
             jobs.inner.cancel.lock().expect("cancel map poisoned").remove(&id);
+            jobs.save();
         });
         id
+    }
+
+    /// Record that `old` was retried as `new`.
+    pub fn mark_retried(&self, old: u64, new: u64) {
+        self.update(old, |j| j.retried_as = Some(new));
+        self.save();
+    }
+
+    /// Write the job list (running jobs + recent history) to the store.
+    fn save(&self) {
+        let Some(path) = &self.inner.store else { return };
+        let _saving = self.inner.saving.lock().expect("save mutex poisoned");
+        let snapshot: Vec<JobInfo> = {
+            let jobs = self.lock();
+            let mut finished = jobs.values().filter(|j| j.state != JobState::Running).count();
+            jobs.values()
+                .filter(|j| {
+                    let keep = j.state == JobState::Running || finished <= HISTORY;
+                    if j.state != JobState::Running {
+                        finished -= 1; // oldest first: drop until HISTORY remain
+                    }
+                    keep
+                })
+                .cloned()
+                .collect()
+        };
+        if let Err(e) = write_json(path, &snapshot) {
+            tracing::warn!("saving jobs to {}: {e}", path.display());
+        }
     }
 
     pub fn list(&self) -> Vec<JobInfo> {
@@ -172,18 +273,36 @@ impl Jobs {
     }
 }
 
+fn write_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, serde_json::to_vec(value).map_err(std::io::Error::other)?)?;
+    std::fs::rename(&tmp, path)
+}
+
 impl JobCtx {
     pub fn id(&self) -> u64 {
         self.id
     }
 
+    /// A handle whose step names start with `prefix`.
+    pub fn with_prefix(&self, prefix: &str) -> Self {
+        Self { prefix: Some(prefix.into()), ..self.clone() }
+    }
+
     pub fn step(&self, step: &str) {
+        let step = match &self.prefix {
+            Some(p) => format!("{p}{step}"),
+            None => step.to_owned(),
+        };
         tracing::info!(job = self.id, "{step}");
-        let step = step.to_owned();
         self.jobs.update(self.id, |j| {
             j.step = Some(step);
             j.progress = None;
         });
+        self.jobs.save();
     }
 
     pub fn progress(&self, done: u64, total: Option<u64>) {
@@ -276,5 +395,74 @@ mod tests {
         let id = jobs.spawn("t", "fail", None, |_| async { Err("boom".into()) });
         let j = wait(&jobs, id).await;
         assert_eq!((j.state, j.error.as_deref()), (JobState::Failed, Some("boom")));
+    }
+
+    #[tokio::test]
+    async fn persists_and_reports_interrupted_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.json");
+        let (jobs, interrupted) = Jobs::persistent(path.clone());
+        assert!(interrupted.is_empty());
+        let done = jobs.spawn_with_spec("t", "done", None, Some(serde_json::json!({"n": 1})), |ctx| async move {
+            ctx.with_prefix("[1/2] ").step("downloading");
+            Ok(Value::Null)
+        });
+        wait(&jobs, done).await;
+        assert_eq!(jobs.get(done).unwrap().step.as_deref(), Some("[1/2] downloading"));
+        let running = jobs.spawn_with_spec("t", "slow", None, Some(serde_json::json!({"n": 2})), |_| async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok(Value::Null)
+        });
+        drop(jobs); // "daemon stops" with one job running
+
+        let (jobs, interrupted) = Jobs::persistent(path.clone());
+        assert_eq!(interrupted.len(), 1);
+        assert_eq!((interrupted[0].id, interrupted[0].spec.clone()), (running, Some(serde_json::json!({"n": 2}))));
+        let j = jobs.get(running).unwrap();
+        assert_eq!((j.state, j.error.as_deref()), (JobState::Failed, Some(INTERRUPTED)));
+        assert_eq!(jobs.get(done).unwrap().state, JobState::Done);
+        let next = jobs.spawn("t", "new", None, |_| async { Ok(Value::Null) });
+        assert!(next > running, "ids continue after a restart");
+        jobs.mark_retried(running, next);
+        wait(&jobs, next).await;
+
+        let (jobs, interrupted) = Jobs::persistent(path);
+        assert!(interrupted.is_empty(), "already handled");
+        assert_eq!(jobs.get(running).unwrap().retried_as, Some(next));
+    }
+
+    #[test]
+    fn history_is_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("jobs.json");
+        let (jobs, _) = Jobs::persistent(path.clone());
+        {
+            let mut map = jobs.lock();
+            for id in 1..=HISTORY as u64 + 5 {
+                let mut j = map.values().next().cloned().unwrap_or_else(|| JobInfo {
+                    id: 0,
+                    kind: "t".into(),
+                    title: "t".into(),
+                    state: JobState::Done,
+                    step: None,
+                    progress: None,
+                    error: None,
+                    result: None,
+                    started_at: 0,
+                    finished_at: None,
+                    log: VecDeque::new(),
+                    spec: None,
+                    retried_as: None,
+                    key: None,
+                });
+                j.id = id;
+                map.insert(id, j);
+            }
+        }
+        jobs.save();
+        let (jobs, _) = Jobs::persistent(path);
+        let ids: Vec<u64> = jobs.list().iter().map(|j| j.id).collect();
+        assert_eq!(ids.len(), HISTORY);
+        assert_eq!(ids.last(), Some(&6), "oldest dropped");
     }
 }

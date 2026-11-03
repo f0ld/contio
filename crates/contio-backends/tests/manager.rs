@@ -36,7 +36,7 @@ impl Backend for FakeBackend {
         format!("upstream-{}", p.id)
     }
     fn estimate_bytes(&self, p: &ModelProfile) -> Option<u64> {
-        let ModelSource::Gguf { path } = &p.source else { return None };
+        let ModelSource::Gguf { path, .. } = &p.source else { return None };
         Some(std::fs::metadata(path).ok()?.len())
     }
 }
@@ -59,15 +59,9 @@ fn fixture(
         .map(|&(id, device, gib, pinned)| {
             let path = dir.path().join(format!("{id}.gguf"));
             std::fs::File::create(&path).unwrap().set_len(gib * GIB).unwrap(); // sparse
-            ModelProfile {
-                id: id.into(),
-                source: ModelSource::Gguf { path },
-                device,
-                context: None,
-                pinned,
-                idle_ttl_secs: None,
-                extra_args: vec![],
-            }
+            let mut p = ModelProfile::new(id, ModelSource::Gguf { path, mmproj: None }, device);
+            p.pinned = pinned;
+            p
         })
         .collect();
     let config = ManagerConfig {
@@ -216,4 +210,39 @@ async fn unload_and_unknown_models() {
     assert!(m.unload("a").await.unwrap());
     assert!(!healthy(&url).await);
     assert!(matches!(m.acquire("nope").await, Err(BackendError::UnknownModel(_))));
+}
+
+#[tokio::test]
+async fn runtime_registration() {
+    let f = fixture(&[("cfg", DeviceKind::Gpu, 1, false)], 10, None, HashMap::new());
+    let m = &f.manager;
+    let path = f._dir.path().join("cfg.gguf");
+    let new = ModelProfile::new("api", ModelSource::Gguf { path, mmproj: None }, DeviceKind::Gpu);
+
+    m.add_profile(new.clone(), true).unwrap();
+    assert!(matches!(m.add_profile(new.clone(), true), Err(BackendError::DuplicateModel(_))));
+    assert_eq!(m.managed_profiles(), vec![new.clone()]);
+    let st = m.statuses();
+    assert!(!st[0].managed && st[1].managed);
+
+    // config models can't be changed through the API
+    let cfg = m.profile("cfg").unwrap();
+    assert!(matches!(m.update_profile(cfg).await, Err(BackendError::NotManaged(_))));
+    assert!(matches!(m.remove_profile("cfg").await, Err(BackendError::NotManaged(_))));
+
+    // updating a running model restarts it with the new settings
+    let first = m.acquire("api").await.unwrap().base_url.clone();
+    let mut changed = new.clone();
+    changed.context = Some(4096);
+    m.update_profile(changed).await.unwrap();
+    assert_eq!(state(m, "api"), ModelState::Stopped);
+    assert!(!healthy(&first).await, "old instance stopped");
+    assert_eq!(m.profile("api").unwrap().context, Some(4096));
+
+    m.acquire("api").await.unwrap();
+    let removed = m.remove_profile("api").await.unwrap();
+    assert_eq!(removed.id, "api");
+    assert!(matches!(m.acquire("api").await, Err(BackendError::UnknownModel(_))));
+    assert!(m.managed_profiles().is_empty());
+    m.shutdown().await;
 }

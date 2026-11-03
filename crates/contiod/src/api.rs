@@ -9,7 +9,7 @@ use axum::extract::{Path, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use contio_backends::ModelManager;
 use contio_core::hw::{HardwareInfo, Metrics};
@@ -26,9 +26,11 @@ const GUI_ORIGINS: [&str; 4] = [
     "http://tauri.localhost",
 ];
 
+use crate::catalog_api::{self, CatalogService};
 use crate::config::Alias;
-use crate::install_api::{self, Installer};
 use crate::gateway;
+use crate::install_api::{self, Installer};
+use crate::registry::Registry;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -41,18 +43,26 @@ pub struct AppState {
     /// Conversations for the Responses API's `previous_response_id`.
     pub responses: gateway::responses::Store,
     pub installer: Installer,
+    pub catalog: CatalogService,
+    /// Models registered through the API, settings.
+    pub registry: Registry,
+}
+
+/// Everything [`AppState::start`] needs besides the sampler interval.
+pub struct Services {
+    pub probe: HwProbe,
+    pub manager: ModelManager,
+    pub aliases: Vec<Alias>,
+    pub installer: Installer,
+    pub catalog: CatalogService,
+    pub registry: Registry,
 }
 
 impl AppState {
     /// Starts a background sampler that refreshes metrics every `interval`.
     /// All WebSocket clients share this one sampler.
-    pub fn start(
-        probe: HwProbe,
-        manager: ModelManager,
-        aliases: Vec<Alias>,
-        installer: Installer,
-        interval: Duration,
-    ) -> Self {
+    pub fn start(services: Services, interval: Duration) -> Self {
+        let Services { probe, manager, aliases, installer, catalog, registry } = services;
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
         tokio::spawn(async move {
@@ -80,6 +90,8 @@ impl AppState {
             aliases: Arc::new(aliases.into_iter().map(|a| (a.name.clone(), a)).collect()),
             responses: gateway::responses::Store::default(),
             installer,
+            catalog,
+            registry,
         }
     }
 }
@@ -87,26 +99,35 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(GUI_ORIGINS.map(HeaderValue::from_static))
-        .allow_methods([Method::GET, Method::POST]);
+        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::PUT, Method::DELETE])
+        .allow_headers([axum::http::header::CONTENT_TYPE]);
 
     Router::new()
         .route("/api/health", get(health))
         .route("/api/hw", get(hardware))
         .route("/api/events", get(events))
         .route("/api/models", get(model_statuses))
+        .route("/api/models/{id}", patch(catalog_api::update_model).delete(catalog_api::remove_model))
         .route("/api/models/{id}/load", post(load_model))
         .route("/api/models/{id}/unload", post(unload_model))
-        .route("/api/models/download", post(install_api::download_model))
+        .route("/api/catalog", get(catalog_api::overview))
+        .route("/api/catalog/models/{id}", get(catalog_api::model_detail))
+        .route("/api/catalog/search", get(catalog_api::search))
+        .route("/api/catalog/repo", get(catalog_api::repo_detail))
+        .route("/api/catalog/install", post(catalog_api::install))
         .route("/api/jobs", get(install_api::list_jobs))
         .route("/api/jobs/{id}", get(install_api::get_job))
         .route("/api/jobs/{id}/cancel", post(install_api::cancel_job))
+        .route("/api/jobs/{id}/retry", post(install_api::retry_job))
         .route("/api/backends", get(install_api::list_backends))
         .route("/api/backends/preflight", get(install_api::preflight))
         .route("/api/backends/install", post(install_api::install_backend))
+        .route("/api/settings", get(install_api::get_settings).put(install_api::put_settings))
         .route("/v1/models", get(gateway::models))
         .route("/v1/chat/completions", post(gateway::chat))
         .route("/v1/completions", post(gateway::passthrough))
         .route("/v1/embeddings", post(gateway::passthrough))
+        .route("/v1/rerank", post(gateway::passthrough))
         .route("/v1/messages", post(gateway::anthropic::messages))
         .route("/v1/messages/count_tokens", post(gateway::anthropic::count_tokens))
         .route("/v1/responses", post(gateway::responses::create))
@@ -199,7 +220,22 @@ mod tests {
             vec![],
             vec![],
         );
-        AppState::start(probe, manager, vec![], Installer::new(std::env::temp_dir(), 4), Duration::from_secs(60))
+        // never written to: no test here installs or registers anything
+        let data = std::env::temp_dir().join("contio-api-test-unused");
+        let services = Services {
+            probe,
+            manager,
+            aliases: vec![],
+            installer: Installer::in_memory(data.clone(), 4),
+            catalog: CatalogService::new(
+                contio_catalog::Catalog::default(),
+                reqwest::Client::new(),
+                "http://127.0.0.1:9",
+                data.join("cache"),
+            ),
+            registry: Registry::new(&data),
+        };
+        AppState::start(services, Duration::from_secs(60))
     }
 
     fn fixture() -> tempfile::TempDir {

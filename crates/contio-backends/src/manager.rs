@@ -34,12 +34,19 @@ pub struct ModelManager {
 struct Inner {
     config: ManagerConfig,
     backends: RwLock<Vec<Arc<dyn Backend>>>,
-    profiles: Vec<ModelProfile>,
+    profiles: RwLock<Vec<Registered>>,
     slots: Mutex<HashMap<String, Slot>>,
     /// Serializes loads/unloads/evictions; requests to running models never wait on it.
     ops: tokio::sync::Mutex<()>,
     http: reqwest::Client,
     epoch: Instant,
+}
+
+struct Registered {
+    profile: ModelProfile,
+    /// Added through the API (persisted by the daemon, removable); `false` for
+    /// models from `config.toml`.
+    managed: bool,
 }
 
 struct Slot {
@@ -82,12 +89,14 @@ fn millis_since(epoch: Instant) -> u64 {
 const MIB: u64 = 1024 * 1024;
 
 impl ModelManager {
+    /// `profiles` are the fixed ones from the config file; see [`Self::add_profile`].
     pub fn new(config: ManagerConfig, backends: Vec<Arc<dyn Backend>>, profiles: Vec<ModelProfile>) -> Self {
+        let profiles = profiles.into_iter().map(|profile| Registered { profile, managed: false }).collect();
         Self {
             inner: Arc::new(Inner {
                 config,
                 backends: RwLock::new(backends),
-                profiles,
+                profiles: RwLock::new(profiles),
                 slots: Mutex::new(HashMap::new()),
                 ops: tokio::sync::Mutex::new(()),
                 http: reqwest::Client::new(),
@@ -96,8 +105,70 @@ impl ModelManager {
         }
     }
 
-    pub fn profiles(&self) -> &[ModelProfile] {
-        &self.inner.profiles
+    pub fn profiles(&self) -> Vec<ModelProfile> {
+        self.read_profiles().iter().map(|r| r.profile.clone()).collect()
+    }
+
+    /// Profiles added through the API, for persisting them.
+    pub fn managed_profiles(&self) -> Vec<ModelProfile> {
+        self.read_profiles().iter().filter(|r| r.managed).map(|r| r.profile.clone()).collect()
+    }
+
+    pub fn profile(&self, id: &str) -> Result<ModelProfile, BackendError> {
+        self.read_profiles()
+            .iter()
+            .find(|r| r.profile.id == id)
+            .map(|r| r.profile.clone())
+            .ok_or_else(|| BackendError::UnknownModel(id.to_owned()))
+    }
+
+    /// Register a model at runtime (`managed`: may later be updated/removed).
+    pub fn add_profile(&self, profile: ModelProfile, managed: bool) -> Result<(), BackendError> {
+        let mut profiles = self.write_profiles();
+        if profiles.iter().any(|r| r.profile.id == profile.id) {
+            return Err(BackendError::DuplicateModel(profile.id));
+        }
+        tracing::info!(model = %profile.id, "model registered");
+        profiles.push(Registered { profile, managed });
+        Ok(())
+    }
+
+    /// Replace a managed profile. A running instance is stopped so the next
+    /// request starts it with the new settings.
+    pub async fn update_profile(&self, profile: ModelProfile) -> Result<(), BackendError> {
+        let _ops = self.inner.ops.lock().await;
+        {
+            let mut profiles = self.write_profiles();
+            let r = profiles
+                .iter_mut()
+                .find(|r| r.profile.id == profile.id)
+                .ok_or_else(|| BackendError::UnknownModel(profile.id.clone()))?;
+            if !r.managed {
+                return Err(BackendError::NotManaged(profile.id));
+            }
+            r.profile = profile.clone();
+        }
+        self.stop_slot(&profile.id).await;
+        Ok(())
+    }
+
+    /// Unregister a managed model, stopping it first.
+    pub async fn remove_profile(&self, id: &str) -> Result<ModelProfile, BackendError> {
+        let _ops = self.inner.ops.lock().await;
+        let removed = {
+            let mut profiles = self.write_profiles();
+            let i = profiles
+                .iter()
+                .position(|r| r.profile.id == id)
+                .ok_or_else(|| BackendError::UnknownModel(id.to_owned()))?;
+            if !profiles[i].managed {
+                return Err(BackendError::NotManaged(id.to_owned()));
+            }
+            profiles.remove(i).profile
+        };
+        self.stop_slot(id).await;
+        tracing::info!(model = id, "model removed");
+        Ok(removed)
     }
 
     /// Register a backend at runtime (e.g. right after it was installed).
@@ -105,6 +176,16 @@ impl ModelManager {
     pub fn add_backend(&self, backend: Arc<dyn Backend>) {
         tracing::info!(backend = %backend.describe(), "backend registered");
         self.inner.backends.write().expect("backends lock poisoned").insert(0, backend);
+    }
+
+    /// Whether a backend with this [`Backend::name`] is registered.
+    pub fn has_backend(&self, name: &str) -> bool {
+        self.inner.backends.read().expect("backends lock poisoned").iter().any(|b| b.name() == name)
+    }
+
+    /// Bytes contio may use per pool (fit estimates use the same numbers).
+    pub fn pool_budgets(&self) -> &HashMap<MemoryPoolKind, u64> {
+        &self.inner.config.pool_budgets
     }
 
     /// Descriptions of the registered backends, in priority order.
@@ -115,7 +196,7 @@ impl ModelManager {
     /// Get a lease on a running instance of `id`, loading it (and evicting
     /// others from its pool) if needed.
     pub async fn acquire(&self, id: &str) -> Result<Lease, BackendError> {
-        let profile = self.profile(id)?.clone();
+        let profile = self.profile(id)?;
         if let Some(lease) = self.try_lease(id) {
             return Ok(lease);
         }
@@ -172,14 +253,19 @@ impl ModelManager {
     pub async fn unload(&self, id: &str) -> Result<bool, BackendError> {
         self.profile(id)?;
         let _ops = self.inner.ops.lock().await;
+        Ok(self.stop_slot(id).await)
+    }
+
+    /// Forget `id`'s slot, stopping it if running. Caller holds `ops`.
+    async fn stop_slot(&self, id: &str) -> bool {
         let taken = self.lock_slots().remove(id);
         match taken {
             Some(Slot { state: SlotState::Ready(instance), .. }) => {
                 tracing::info!(model = id, "unloading");
                 instance.stop().await;
-                Ok(true)
+                true
             }
-            _ => Ok(false),
+            _ => false,
         }
     }
 
@@ -190,9 +276,10 @@ impl ModelManager {
         };
         let now = millis_since(self.inner.epoch);
         let mut stopped = Vec::new();
+        let profiles = self.profiles();
         {
             let mut slots = self.lock_slots();
-            for profile in &self.inner.profiles {
+            for profile in &profiles {
                 let Some(slot) = slots.get_mut(&profile.id) else { continue };
                 let SlotState::Ready(instance) = &mut slot.state else { continue };
                 if !instance.is_alive() {
@@ -233,16 +320,21 @@ impl ModelManager {
     }
 
     pub fn statuses(&self) -> Vec<ModelStatus> {
+        let profiles = self.read_profiles();
         let slots = self.lock_slots();
-        self.inner
-            .profiles
+        profiles
             .iter()
-            .map(|p| {
+            .map(|r| {
+                let p = &r.profile;
                 let backend = self.backend_for(p).ok();
                 let slot = slots.get(&p.id);
                 ModelStatus {
                     id: p.id.clone(),
                     device: p.device,
+                    kind: p.kind,
+                    context: p.context,
+                    managed: r.managed,
+                    origin: p.origin.clone(),
                     pool: p.pool(),
                     backend: backend.as_ref().map(|b| b.name().to_owned()),
                     pinned: p.pinned,
@@ -263,12 +355,12 @@ impl ModelManager {
 
     // --- internals ---------------------------------------------------------------
 
-    fn profile(&self, id: &str) -> Result<&ModelProfile, BackendError> {
-        self.inner
-            .profiles
-            .iter()
-            .find(|p| p.id == id)
-            .ok_or_else(|| BackendError::UnknownModel(id.to_owned()))
+    fn read_profiles(&self) -> std::sync::RwLockReadGuard<'_, Vec<Registered>> {
+        self.inner.profiles.read().expect("profiles lock poisoned")
+    }
+
+    fn write_profiles(&self) -> std::sync::RwLockWriteGuard<'_, Vec<Registered>> {
+        self.inner.profiles.write().expect("profiles lock poisoned")
     }
 
     fn backend_for(&self, profile: &ModelProfile) -> Result<Arc<dyn Backend>, BackendError> {
@@ -286,7 +378,10 @@ impl ModelManager {
         self.inner.slots.lock().expect("model slot mutex poisoned")
     }
 
+    // Lock order everywhere: profiles before slots.
     fn try_lease(&self, id: &str) -> Option<Lease> {
+        let profile = self.profile(id).ok()?;
+        let upstream_model = self.backend_for(&profile).ok()?.upstream_model(&profile);
         let mut slots = self.lock_slots();
         let slot = slots.get_mut(id)?;
         let SlotState::Ready(instance) = &mut slot.state else { return None };
@@ -294,8 +389,6 @@ impl ModelManager {
             slot.state = SlotState::Failed("backend process exited".into());
             return None;
         }
-        let profile = self.profile(id).ok()?;
-        let upstream_model = self.backend_for(profile).ok()?.upstream_model(profile);
         slot.in_flight.fetch_add(1, Ordering::AcqRel);
         slot.last_used.store(millis_since(self.inner.epoch), Ordering::Relaxed);
         Some(Lease {
@@ -335,9 +428,15 @@ impl ModelManager {
         let (Some(need), Some(&budget)) = (estimate, self.inner.config.pool_budgets.get(&pool)) else {
             return Ok(Vec::new());
         };
+        let (in_pool, pinned): (Vec<String>, Vec<String>) = {
+            let profiles = self.read_profiles();
+            let ids = |f: &dyn Fn(&ModelProfile) -> bool| {
+                profiles.iter().filter(|r| f(&r.profile)).map(|r| r.profile.id.clone()).collect()
+            };
+            (ids(&|p| p.pool() == pool), ids(&|p| p.pinned))
+        };
+        let in_pool = |id: &str| in_pool.iter().any(|p| p == id);
         let mut slots = self.lock_slots();
-
-        let in_pool = |id: &str| self.profile(id).is_ok_and(|p| p.pool() == pool);
         let mut used = 0u64;
         let mut candidates: Vec<(u64, u64, String)> = Vec::new(); // (last_used, bytes, id)
         for (id, slot) in slots.iter() {
@@ -347,7 +446,7 @@ impl ModelManager {
             let bytes = slot.estimate.unwrap_or(0);
             used += bytes;
             let evictable = matches!(slot.state, SlotState::Ready(_))
-                && !self.profile(id).is_ok_and(|p| p.pinned)
+                && !pinned.contains(id)
                 && slot.in_flight.load(Ordering::Acquire) == 0;
             if evictable {
                 candidates.push((slot.last_used.load(Ordering::Relaxed), bytes, id.clone()));

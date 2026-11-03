@@ -4,10 +4,10 @@
 use std::path::{Path, PathBuf};
 
 use contio_core::hw::DeviceKind;
-use contio_core::model::{ModelProfile, ModelSource};
+use contio_core::model::{ModelKind, ModelProfile, ModelSource, estimate_memory};
 use tokio::process::Command;
 
-use crate::{Backend, BackendError, estimate_from_weights};
+use crate::{Backend, BackendError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlamaRuntime {
@@ -36,13 +36,20 @@ impl LlamaCppBackend {
 
     fn gguf_path(profile: &ModelProfile) -> Option<&PathBuf> {
         match &profile.source {
-            ModelSource::Gguf { path } => Some(path),
+            ModelSource::Gguf { path, .. } => Some(path),
             ModelSource::Flm { .. } => None,
         }
     }
 
-    /// `llama-server` arguments; `model` and `host` differ between runtimes.
-    fn args(&self, profile: &ModelProfile, port: u16, model: &str, host: &str) -> Vec<String> {
+    fn mmproj_path(profile: &ModelProfile) -> Option<&PathBuf> {
+        match &profile.source {
+            ModelSource::Gguf { mmproj, .. } => mmproj.as_ref(),
+            ModelSource::Flm { .. } => None,
+        }
+    }
+
+    /// `llama-server` arguments; paths and `host` differ between runtimes.
+    fn args(&self, profile: &ModelProfile, port: u16, model: &str, mmproj: Option<&str>, host: &str) -> Vec<String> {
         let mut a: Vec<String> = vec![
             "--model".into(),
             model.to_owned(),
@@ -60,6 +67,18 @@ impl LlamaCppBackend {
         if let Some(ctx) = profile.context {
             a.extend(["--ctx-size".into(), ctx.to_string()]);
         }
+        if let Some(m) = mmproj {
+            a.extend(["--mmproj".into(), m.to_owned()]);
+        }
+        match profile.kind {
+            ModelKind::Chat => {}
+            kind => {
+                a.push(if kind == ModelKind::Embedding { "--embedding" } else { "--reranking" }.into());
+                // non-causal models need a whole input in one micro-batch
+                let batch = profile.context.unwrap_or(8192).to_string();
+                a.extend(["--batch-size".into(), batch.clone(), "--ubatch-size".into(), batch]);
+            }
+        }
         match profile.device {
             DeviceKind::Gpu => a.extend(["--n-gpu-layers".into(), "999".into()]),
             _ => {
@@ -73,11 +92,14 @@ impl LlamaCppBackend {
         a
     }
 
-    /// `podman run` arguments: model directory mounted read-only at /models,
-    /// port published on localhost only, GPU via /dev/dri.
+    /// `podman run` arguments: model directory mounted read-only at /models
+    /// (the projector's at /mmproj if elsewhere), port published on localhost
+    /// only, GPU via /dev/dri.
     fn podman_args(&self, image: &str, profile: &ModelProfile, port: u16, model: &Path) -> Vec<String> {
-        let dir = model.parent().unwrap_or(Path::new("/")).display().to_string();
-        let file = model.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let parent = |p: &Path| p.parent().unwrap_or(Path::new("/")).to_owned();
+        let file_name = |p: &Path| p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = parent(model);
+        let file = file_name(model);
         let name: String =
             profile.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
         let mut a: Vec<String> = vec![
@@ -91,15 +113,44 @@ impl LlamaCppBackend {
             "--publish".into(),
             format!("127.0.0.1:{port}:{port}"),
             "--volume".into(),
-            format!("{dir}:/models:ro"),
+            format!("{}:/models:ro", dir.display()),
         ];
+        let mmproj = Self::mmproj_path(profile).map(|m| {
+            if parent(m) == dir {
+                format!("/models/{}", file_name(m))
+            } else {
+                a.extend(["--volume".into(), format!("{}:/mmproj:ro", parent(m).display())]);
+                format!("/mmproj/{}", file_name(m))
+            }
+        });
         if profile.device == DeviceKind::Gpu {
             a.extend(["--device".into(), "/dev/dri".into()]);
         }
         a.push(image.to_owned());
-        a.extend(self.args(profile, port, &format!("/models/{file}"), "0.0.0.0"));
+        a.extend(self.args(profile, port, &format!("/models/{file}"), mmproj.as_deref(), "0.0.0.0"));
         a
     }
+}
+
+/// Size of a GGUF model on disk, all shards of a split model included
+/// (`name-00001-of-00003.gguf` → shards 1 to 3 in the same directory).
+pub(crate) fn gguf_bytes(path: &Path) -> Option<u64> {
+    let first = std::fs::metadata(path).ok()?.len();
+    let name = path.file_name()?.to_str()?;
+    let Some((prefix, total)) = split_name(name) else { return Some(first) };
+    let mut sum = first;
+    for i in 2..=total {
+        sum += std::fs::metadata(path.with_file_name(format!("{prefix}-{i:05}-of-{total:05}.gguf"))).ok()?.len();
+    }
+    Some(sum)
+}
+
+/// `("name", 3)` for `name-00001-of-00003.gguf`.
+fn split_name(name: &str) -> Option<(&str, u32)> {
+    let stem = name.strip_suffix(".gguf")?;
+    let (rest, total) = stem.rsplit_once("-of-")?;
+    let (prefix, index) = rest.rsplit_once('-')?;
+    (index == "00001" && total.len() == 5).then_some((prefix, total.parse().ok()?))
 }
 
 /// First `name` on `$PATH`.
@@ -129,8 +180,10 @@ impl Backend for LlamaCppBackend {
 
     fn command(&self, profile: &ModelProfile, port: u16) -> Result<Command, BackendError> {
         let path = Self::gguf_path(profile).ok_or_else(|| BackendError::Unsupported(profile.id.clone()))?;
-        if !path.is_file() {
-            return Err(BackendError::MissingModelFile(path.clone()));
+        for file in std::iter::once(path).chain(Self::mmproj_path(profile)) {
+            if !file.is_file() {
+                return Err(BackendError::MissingModelFile(file.clone()));
+            }
         }
         match &self.config.runtime {
             LlamaRuntime::Native { bin_dir } => {
@@ -139,7 +192,8 @@ impl Backend for LlamaCppBackend {
                     return Err(BackendError::MissingBinary(bin));
                 }
                 let mut cmd = Command::new(bin);
-                cmd.args(self.args(profile, port, &path.display().to_string(), "127.0.0.1"));
+                let mmproj = Self::mmproj_path(profile).map(|m| m.display().to_string());
+                cmd.args(self.args(profile, port, &path.display().to_string(), mmproj.as_deref(), "127.0.0.1"));
                 Ok(cmd)
             }
             LlamaRuntime::Podman { image } => {
@@ -160,8 +214,11 @@ impl Backend for LlamaCppBackend {
     }
 
     fn estimate_bytes(&self, profile: &ModelProfile) -> Option<u64> {
-        let weights = std::fs::metadata(Self::gguf_path(profile)?).ok()?.len();
-        Some(estimate_from_weights(weights, profile.context))
+        let mut weights = gguf_bytes(Self::gguf_path(profile)?)?;
+        if let Some(m) = Self::mmproj_path(profile) {
+            weights += std::fs::metadata(m).map(|m| m.len()).unwrap_or(0);
+        }
+        Some(estimate_memory(weights, profile.kv.as_ref(), profile.context))
     }
 }
 
@@ -170,15 +227,10 @@ mod tests {
     use super::*;
 
     fn profile(device: DeviceKind) -> ModelProfile {
-        ModelProfile {
-            id: "qwen3-8b".into(),
-            source: ModelSource::Gguf { path: "/m/q.gguf".into() },
-            device,
-            context: Some(16384),
-            pinned: false,
-            idle_ttl_secs: None,
-            extra_args: vec!["--cache-type-k".into(), "q8_0".into()],
-        }
+        let mut p = ModelProfile::new("qwen3-8b", ModelSource::Gguf { path: "/m/q.gguf".into(), mmproj: None }, device);
+        p.context = Some(16384);
+        p.extra_args = vec!["--cache-type-k".into(), "q8_0".into()];
+        p
     }
 
     fn backend() -> LlamaCppBackend {
@@ -189,7 +241,7 @@ mod tests {
     }
 
     fn native_args(p: &ModelProfile) -> String {
-        backend().args(p, 40001, "/m/q.gguf", "127.0.0.1").join(" ")
+        backend().args(p, 40001, "/m/q.gguf", None, "127.0.0.1").join(" ")
     }
 
     #[test]
@@ -225,7 +277,10 @@ mod tests {
 
         let model = tempfile::NamedTempFile::new().unwrap();
         let mut p = profile(DeviceKind::Gpu);
-        p.source = ModelSource::Gguf { path: model.path().into() };
+        p.source = ModelSource::Gguf { path: model.path().into(), mmproj: Some("/missing/mmproj.gguf".into()) };
+        let err = backend().command(&p, 1).unwrap_err();
+        assert!(matches!(err, BackendError::MissingModelFile(ref f) if f.ends_with("mmproj.gguf")), "{err}");
+        p.source = ModelSource::Gguf { path: model.path().into(), mmproj: None };
         let err = backend().command(&p, 1).unwrap_err();
         assert!(matches!(err, BackendError::MissingBinary(_)), "{err}");
     }
@@ -243,5 +298,36 @@ mod tests {
 
         let cpu = backend().podman_args("img", &profile(DeviceKind::Cpu), 1, Path::new("/m/q.gguf")).join(" ");
         assert!(!cpu.contains("/dev/dri"));
+
+        p.source = ModelSource::Gguf { path: "/data/gguf/q.gguf".into(), mmproj: Some("/data/gguf/mmproj-F16.gguf".into()) };
+        let a = backend().podman_args("img", &p, 1, Path::new("/data/gguf/q.gguf")).join(" ");
+        assert!(a.contains("--mmproj /models/mmproj-F16.gguf") && !a.contains("/mmproj:ro"));
+        p.source = ModelSource::Gguf { path: "/data/gguf/q.gguf".into(), mmproj: Some("/other/mm.gguf".into()) };
+        let a = backend().podman_args("img", &p, 1, Path::new("/data/gguf/q.gguf")).join(" ");
+        assert!(a.contains("--volume /other:/mmproj:ro") && a.contains("--mmproj /mmproj/mm.gguf"));
+    }
+
+    #[test]
+    fn embedding_and_reranker_modes() {
+        let mut p = profile(DeviceKind::Gpu);
+        p.kind = ModelKind::Embedding;
+        p.context = Some(2048);
+        let a = native_args(&p);
+        assert!(a.contains("--embedding --batch-size 2048 --ubatch-size 2048"), "{a}");
+        p.kind = ModelKind::Reranker;
+        assert!(native_args(&p).contains("--reranking"));
+        assert!(!native_args(&profile(DeviceKind::Gpu)).contains("--embedding"));
+    }
+
+    #[test]
+    fn split_models_are_summed() {
+        let d = tempfile::tempdir().unwrap();
+        for (name, len) in [("m-00001-of-00002.gguf", 10), ("m-00002-of-00002.gguf", 5), ("single.gguf", 7)] {
+            std::fs::write(d.path().join(name), vec![0u8; len]).unwrap();
+        }
+        assert_eq!(gguf_bytes(&d.path().join("m-00001-of-00002.gguf")), Some(15));
+        assert_eq!(gguf_bytes(&d.path().join("single.gguf")), Some(7));
+        std::fs::remove_file(d.path().join("m-00002-of-00002.gguf")).unwrap();
+        assert_eq!(gguf_bytes(&d.path().join("m-00001-of-00002.gguf")), None, "incomplete download");
     }
 }

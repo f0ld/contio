@@ -753,6 +753,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "contio-catalog"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "contio-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 1.1.8+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "contio-cli"
 version = "0.1.0"
 dependencies = [
@@ -816,6 +831,7 @@ dependencies = [
  "axum",
  "clap",
  "contio-backends",
+ "contio-catalog",
  "contio-core",
  "contio-hw",
  "contio-install",

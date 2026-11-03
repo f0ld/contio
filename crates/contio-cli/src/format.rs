@@ -3,7 +3,7 @@
 use std::fmt::Write;
 
 use contio_core::hw::{HardwareInfo, MemoryPool, MemoryPoolKind, PowerProfile};
-use contio_core::model::{ModelState, ModelStatus};
+use contio_core::model::{ModelKind, ModelState, ModelStatus};
 use serde_json::Value;
 
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -33,22 +33,277 @@ fn state(s: &ModelState) -> String {
 
 pub fn models(models: &[ModelStatus]) -> String {
     if models.is_empty() {
-        return "no models configured (see docs/config.example.toml)".into();
+        return "no models installed yet: try `contio search` and `contio install <model>`".into();
     }
-    let rows: Vec<[String; 6]> = models
+    let rows: Vec<[String; 7]> = models
         .iter()
         .map(|m| {
+            let mut device = format!("{:?}", m.device).to_lowercase();
+            if m.kind != ModelKind::Chat {
+                device = format!("{device} ({})", format!("{:?}", m.kind).to_lowercase());
+            }
+            let mut notes = Vec::new();
+            if m.pinned {
+                notes.push("pinned");
+            }
+            if !m.managed {
+                notes.push("config");
+            }
             [
                 m.id.clone(),
-                format!("{:?}", m.device).to_lowercase(),
+                device,
                 m.backend.clone().unwrap_or_else(|| "-".into()),
+                m.context.map_or_else(|| "-".into(), |c| format!("{}k", c / 1024)),
                 m.estimated_bytes.map_or_else(|| "-".into(), gib),
                 if m.in_flight > 0 { format!("{} ({} active)", state(&m.state), m.in_flight) } else { state(&m.state) },
-                if m.pinned { "pinned".into() } else { String::new() },
+                notes.join(", "),
             ]
         })
         .collect();
-    table(&["MODEL", "DEVICE", "BACKEND", "EST. MEM", "STATE", ""], &rows)
+    table(&["MODEL", "DEVICE", "BACKEND", "CTX", "EST. MEM", "STATE", ""], &rows)
+}
+
+/// `contio search` filters, applied client-side to `/api/catalog`.
+pub struct CatalogFilter {
+    pub query: String,
+    pub device: Option<String>,
+    pub fits: bool,
+    pub kind: Option<String>,
+}
+
+fn fit_mark(fit: &Value) -> &'static str {
+    match fit["verdict"].as_str() {
+        Some("fits") => "✓",
+        Some("tight") => "~",
+        Some("too_big") => "✗",
+        _ => "?",
+    }
+}
+
+fn params(v: &Value) -> String {
+    match (v["params"].as_u64(), v["active_b"].as_f64()) {
+        (Some(p), Some(a)) => format!("{:.0}B-A{a}B", p as f64 / 1e9),
+        (Some(p), None) if p < 1_000_000_000 => format!("{:.0}M", p as f64 / 1e6),
+        (Some(p), None) => format!("{:.1}B", p as f64 / 1e9).replace(".0B", "B"),
+        _ => "-".into(),
+    }
+}
+
+fn strings(v: &Value) -> Vec<&str> {
+    v.as_array().into_iter().flatten().filter_map(Value::as_str).collect()
+}
+
+pub fn catalog(raw: &Value, f: &CatalogFilter) -> String {
+    let words: Vec<String> = f.query.to_lowercase().split_whitespace().map(str::to_owned).collect();
+    let keep = |m: &Value| {
+        let hay = format!("{} {} {}", m["id"], m["name"], m["family"]).to_lowercase();
+        let device_ok = match f.device.as_deref() {
+            Some("npu") => !strings(&m["npu"]).is_empty(),
+            Some(d) => !m["suggested"].is_null() && m["suggested"]["fit"][d].is_object(),
+            None => true,
+        };
+        let fit_device = f.device.as_deref().filter(|d| *d != "npu").unwrap_or("gpu");
+        let fits_ok = !f.fits || m["suggested"]["fit"][fit_device]["verdict"].as_str().is_some_and(|v| v != "too_big");
+        words.iter().all(|w| hay.contains(w.as_str()))
+            && device_ok
+            && fits_ok
+            && f.kind.as_deref().is_none_or(|k| m["kind"] == k)
+    };
+    let mut out = Vec::new();
+    for fam in raw["families"].as_array().into_iter().flatten() {
+        let rows: Vec<[String; 7]> = raw["models"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|m| m["family"] == fam["id"] && keep(m))
+            .map(|m| {
+                let s = &m["suggested"];
+                let quant = if s.is_null() {
+                    m["error"].as_str().map_or("-".into(), |e| format!("({})", e.chars().take(30).collect::<String>()))
+                } else {
+                    format!("{} {}", s["label"].as_str().unwrap_or("?"), gib(s["size"].as_u64().unwrap_or(0)))
+                };
+                let fit = if s.is_null() {
+                    "-".into()
+                } else {
+                    format!("gpu {} cpu {}", fit_mark(&s["fit"]["gpu"]), fit_mark(&s["fit"]["cpu"]))
+                };
+                let mut caps = strings(&m["capabilities"]).join(",");
+                if !strings(&m["npu"]).is_empty() {
+                    caps = if caps.is_empty() { "npu".into() } else { format!("{caps},npu") };
+                }
+                if m["kind"] != "chat" {
+                    caps = format!("{}{}{caps}", m["kind"].as_str().unwrap_or_default(), if caps.is_empty() { "" } else { "," });
+                }
+                [
+                    m["id"].as_str().unwrap_or_default().to_owned(),
+                    params(m),
+                    quant,
+                    fit,
+                    m["quant_count"].as_u64().filter(|n| *n > 0).map_or("-".into(), |n| n.to_string()),
+                    caps,
+                    if strings(&m["installed"]).is_empty() { String::new() } else { "installed".into() },
+                ]
+            })
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        out.push(format!(
+            "\x1b[1m{}\x1b[0m \x1b[2m{} · {}\x1b[0m",
+            fam["name"].as_str().unwrap_or_default(),
+            fam["vendor"].as_str().unwrap_or_default(),
+            fam["license"].as_str().unwrap_or_default()
+        ));
+        out.push(indent(&table(&["MODEL", "PARAMS", "SUGGESTED", "FIT", "QUANTS", "CAPABILITIES", ""], &rows)));
+    }
+    if out.is_empty() {
+        return "no matches (try `contio search --hf <words>` for all of Hugging Face)".into();
+    }
+    out.push("\x1b[2mfit: ✓ fits  ~ tight  ✗ too big (at the default context) · details: contio show <model>\x1b[0m".into());
+    out.join("\n")
+}
+
+fn indent(s: &str) -> String {
+    s.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")
+}
+
+pub fn detail(d: &Value) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "\x1b[1m{}\x1b[0m  {}", d["name"].as_str().unwrap_or_default(), d["repo"].as_str().unwrap_or_default());
+    let mut facts = vec![
+        params(d),
+        d["kind"].as_str().unwrap_or_default().to_owned(),
+        format!(
+            "context {} (default {})",
+            d["context_length"].as_u64().map_or("?".into(), |c| format!("{}k", c / 1024)),
+            d["default_context"].as_u64().map_or("?".into(), |c| format!("{}k", c / 1024)),
+        ),
+    ];
+    let caps = strings(&d["capabilities"]).join(", ");
+    if !caps.is_empty() {
+        facts.push(caps);
+    }
+    let _ = writeln!(s, "{}", facts.join(" · "));
+    if let Some(n) = d["notes"].as_str() {
+        let _ = writeln!(s, "\x1b[2m{n}\x1b[0m");
+    }
+    if let Some(e) = d["error"].as_str() {
+        let _ = writeln!(s, "\x1b[33mlisting failed: {e}\x1b[0m");
+    }
+    let rows: Vec<[String; 7]> = d["quants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|q| {
+            let mut label = q["label"].as_str().unwrap_or_default().to_owned();
+            if q["recommended"] == true {
+                label.push_str(" *");
+            }
+            let fit = |dev: &str| {
+                let f = &q["fit"][dev];
+                match f["needed_bytes"].as_u64() {
+                    Some(n) => format!("{} {}", fit_mark(f), gib(n)),
+                    None => "-".into(),
+                }
+            };
+            let status = if !strings(&q["installed"]).is_empty() {
+                format!("installed: {}", strings(&q["installed"]).join(", "))
+            } else if q["downloaded"] == true {
+                "downloaded".into()
+            } else {
+                String::new()
+            };
+            [
+                label,
+                gib(q["size"].as_u64().unwrap_or(0)),
+                q["bits_per_weight"].as_f64().map_or("-".into(), |b| format!("{b:.2}")),
+                q["tier"].as_str().unwrap_or("-").to_owned(),
+                fit("gpu"),
+                fit("cpu"),
+                status,
+            ]
+        })
+        .collect();
+    if !rows.is_empty() {
+        let _ = writeln!(s, "\n{}", table(&["QUANT", "SIZE", "BPW", "QUALITY", "GPU (needs)", "CPU (needs)", ""], &rows));
+        if let Some(m) = d["mmproj"]["path"].as_str() {
+            let _ = writeln!(s, "\x1b[2mvision projector {m} ({}) is included in sizes and installs\x1b[0m", gib(d["mmproj"]["size"].as_u64().unwrap_or(0)));
+        }
+    }
+    let npu: Vec<[String; 4]> = d["npu"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|n| {
+            let mut notes = Vec::new();
+            if n["single_turn"] == true {
+                notes.push("single-turn, 1k ctx".to_owned());
+            }
+            if n["unsupported"] == true {
+                notes.push("not served by contio yet".to_owned());
+            }
+            if !strings(&n["installed"]).is_empty() {
+                notes.push(format!("installed: {}", strings(&n["installed"]).join(", ")));
+            } else if n["downloaded"] == true {
+                notes.push("downloaded".into());
+            }
+            [
+                format!("flm:{}", n["tag"].as_str().unwrap_or_default()),
+                n["footprint_bytes"].as_u64().map_or("-".into(), gib),
+                n["default_context"].as_u64().map_or("-".into(), |c| format!("{}k", c / 1024)),
+                notes.join(", "),
+            ]
+        })
+        .collect();
+    if !npu.is_empty() {
+        let _ = writeln!(s, "\nNPU (FastFlowLM)\n{}", table(&["TAG", "MEMORY", "CTX", ""], &npu));
+    }
+    let target = d["id"].as_str().or(d["repo"].as_str()).unwrap_or("<model>");
+    if rows.is_empty() {
+        let _ = write!(s, "\x1b[2minstall: contio install {target}\x1b[0m");
+    } else {
+        let _ = write!(
+            s,
+            "\x1b[2m* recommended · fit at the default context · install: contio install {target} [--quant Q] [--device gpu|cpu{}]\x1b[0m",
+            if npu.is_empty() { "" } else { "|npu" }
+        );
+    }
+    s
+}
+
+pub fn hf_hits(raw: &Value) -> String {
+    let rows: Vec<[String; 5]> = raw
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|h| {
+            let mut caps = Vec::new();
+            if h["tools"] == true {
+                caps.push("tools");
+            }
+            if h["reasoning"] == true {
+                caps.push("reasoning");
+            }
+            if h["gated"] == true {
+                caps.push("gated");
+            }
+            [
+                h["repo"].as_str().unwrap_or_default().to_owned(),
+                params(h),
+                h["arch"].as_str().unwrap_or("-").to_owned(),
+                h["downloads"].as_u64().map_or("-".into(), |d| format!("{d}")),
+                caps.join(","),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        return "no GGUF repos found".into();
+    }
+    format!(
+        "{}\n\x1b[2mcommunity uploads, not curated · details: contio show <owner/repo>\x1b[0m",
+        table(&["REPO", "PARAMS", "ARCH", "DOWNLOADS", ""], &rows)
+    )
 }
 
 pub fn status(url: &str, health: &Value, models: &[ModelStatus]) -> String {
@@ -141,6 +396,9 @@ pub fn jobs(raw: &Value) -> String {
             if let Some(e) = j["error"].as_str() {
                 let _ = write!(line, "\n     error: {}", e.lines().next().unwrap_or_default());
             }
+            if let Some(n) = j["retried_as"].as_u64() {
+                let _ = write!(line, " → retried as job {n}");
+            }
             line
         })
         .collect::<Vec<_>>()
@@ -160,7 +418,7 @@ pub fn backends(raw: &Value) -> String {
     }
     let installed = raw["installed"].as_array().cloned().unwrap_or_default();
     if installed.is_empty() {
-        s.push_str("installed:  none (try `contio install llama.cpp --method prebuilt`)");
+        s.push_str("installed:  none (try `contio backends install llama.cpp --method prebuilt`)");
     } else {
         s.push_str("installed:");
         for b in installed {
@@ -232,6 +490,10 @@ mod tests {
         ModelStatus {
             id: id.into(),
             device: DeviceKind::Gpu,
+            kind: ModelKind::Chat,
+            context: Some(32768),
+            managed: id != "a",
+            origin: None,
             pool: MemoryPoolKind::Gpu,
             backend: Some("llama.cpp".into()),
             pinned: id == "a",
@@ -249,7 +511,8 @@ mod tests {
         ]);
         let lines: Vec<&str> = t.lines().collect();
         assert!(lines[0].starts_with("MODEL        DEVICE"));
-        assert!(lines[1].contains("ready :4242") && lines[1].ends_with("pinned"));
+        assert!(lines[1].contains("ready :4242") && lines[1].ends_with("pinned, config"), "{}", lines[1]);
+        assert!(lines[1].contains("32k"));
         assert!(lines[2].contains("failed: boom") && !lines[2].contains("more"));
         assert!(lines[1].contains("24.0 GiB"));
     }
@@ -273,7 +536,63 @@ mod tests {
 
     #[test]
     fn empty_models_hint() {
-        assert!(models(&[]).contains("config.example.toml"));
+        assert!(models(&[]).contains("contio search"));
+    }
+
+    fn overview() -> Value {
+        serde_json::json!({
+            "families": [{"id": "qwen", "name": "Qwen", "vendor": "Alibaba", "license": "Apache-2.0", "summary": ""},
+                         {"id": "embeddings", "name": "Embeddings", "vendor": "v", "license": "l", "summary": ""}],
+            "models": [
+                {"id": "qwen3.6-35b-a3b", "name": "Qwen3.6 35B-A3B", "family": "qwen", "kind": "chat",
+                 "params": 34660610688u64, "active_b": 3.0, "capabilities": ["tools", "vision"], "quant_count": 25,
+                 "npu": ["qwen3.6-moe:35b-a3b"], "installed": ["qwen3.6-35b-a3b"],
+                 "suggested": {"label": "UD-Q4_K_XL", "size": 22360456160u64,
+                               "fit": {"gpu": {"verdict": "fits", "needed_bytes": 1, "budget_bytes": 2},
+                                       "cpu": {"verdict": "too_big", "needed_bytes": 1, "budget_bytes": 2}}}},
+                {"id": "nomic", "name": "Nomic", "family": "embeddings", "kind": "embedding", "params": 137000000,
+                 "capabilities": [], "quant_count": 0, "npu": [], "installed": [], "suggested": null,
+                 "error": "offline"}
+            ]
+        })
+    }
+
+    #[test]
+    fn catalog_table_and_filters() {
+        let f = |query: &str, device: Option<&str>, fits: bool| CatalogFilter {
+            query: query.into(),
+            device: device.map(str::to_owned),
+            fits,
+            kind: None,
+        };
+        let all = catalog(&overview(), &f("", None, false));
+        assert!(all.contains("35B-A3B") && all.contains("UD-Q4_K_XL 20.8 GiB") && all.contains("gpu ✓ cpu ✗"));
+        assert!(all.contains("tools,vision,npu") && all.contains("installed"));
+        assert!(all.contains("137M") && all.contains("(offline)") && all.contains("embedding"));
+        assert!(!catalog(&overview(), &f("qwen", None, false)).contains("Nomic"));
+        let npu = catalog(&overview(), &f("", Some("npu"), false));
+        assert!(npu.contains("qwen3.6") && !npu.contains("nomic"));
+        let fits_cpu = catalog(&overview(), &f("", Some("cpu"), true));
+        assert!(fits_cpu.contains("no matches"));
+    }
+
+    #[test]
+    fn detail_table() {
+        let d = serde_json::json!({
+            "id": "m", "name": "M", "repo": "o/m", "params": 8000000000u64, "kind": "chat",
+            "context_length": 40960, "default_context": 32768, "capabilities": ["tools"],
+            "quants": [{"label": "Q4_K_M", "size": 5000000000u64, "bits_per_weight": 4.9, "tier": "very good",
+                        "recommended": true, "installed": ["m"], "downloaded": true,
+                        "fit": {"gpu": {"verdict": "fits", "needed_bytes": 6000000000u64, "budget_bytes": 1},
+                                "cpu": null}}],
+            "mmproj": null,
+            "npu": [{"tag": "m:8b", "footprint_bytes": 5000000000u64, "default_context": 16384,
+                     "single_turn": false, "unsupported": false, "installed": [], "downloaded": true}]
+        });
+        let t = detail(&d);
+        assert!(t.contains("Q4_K_M *") && t.contains("✓ 5.6 GiB") && t.contains("installed: m"), "{t}");
+        assert!(t.contains("flm:m:8b") && t.contains("downloaded"));
+        assert!(t.contains("contio install m"));
     }
 
     #[test]

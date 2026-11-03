@@ -55,6 +55,10 @@ pub trait Backend: Send + Sync {
 pub enum BackendError {
     #[error("unknown model `{0}`")]
     UnknownModel(String),
+    #[error("a model named `{0}` already exists")]
+    DuplicateModel(String),
+    #[error("`{0}` is defined in config.toml; edit it there")]
+    NotManaged(String),
     #[error("no backend can run model `{0}` on this device")]
     Unsupported(String),
     #[error("backend binary not found: {0}")]
@@ -70,13 +74,4 @@ pub enum BackendError {
     StartFailed { model: String, reason: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
-}
-
-/// Bytes a GGUF-style model needs resident: weights plus KV cache/compute buffers.
-/// Deliberately coarse; replaced by measured values once benchmarks exist.
-pub(crate) fn estimate_from_weights(weight_bytes: u64, context: Option<u32>) -> u64 {
-    const MIB: u64 = 1024 * 1024;
-    let ctx = u64::from(context.unwrap_or(8192));
-    // ~10% overhead + ~64 KiB per context token (8B-class model, f16 KV) + 256 MiB buffers
-    weight_bytes + weight_bytes / 10 + ctx * 64 * 1024 + 256 * MIB
 }

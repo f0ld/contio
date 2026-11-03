@@ -173,6 +173,8 @@ fn parse_object(body: &[u8]) -> Result<Value, Response> {
 pub fn backend_error(e: &BackendError) -> Response {
     let (status, kind, param) = match e {
         BackendError::UnknownModel(_) => (StatusCode::NOT_FOUND, "model_not_found", Some("model")),
+        BackendError::DuplicateModel(_) => (StatusCode::CONFLICT, "model_exists", None),
+        BackendError::NotManaged(_) => (StatusCode::CONFLICT, "model_in_config", None),
         BackendError::InsufficientMemory { .. } => (StatusCode::SERVICE_UNAVAILABLE, "insufficient_memory", None),
         BackendError::StartFailed { .. } => (StatusCode::SERVICE_UNAVAILABLE, "backend_start_failed", None),
         BackendError::Unsupported(_) | BackendError::MissingBinary(_) | BackendError::MissingModelFile(_) => {

@@ -32,9 +32,77 @@ enum Command {
     Status,
     /// Hardware report (CPU, GPU, NPU, memory pools, power).
     Hw,
-    /// List configured models and their state.
+    /// List installed models and their state.
     #[command(visible_alias = "ps")]
     Models,
+    /// Browse the catalog (or Hugging Face with --hf).
+    Search {
+        /// Words matched against id, name and family; empty = everything.
+        query: Vec<String>,
+        /// Only models with a version for this device.
+        #[arg(long, value_parser = ["gpu", "cpu", "npu"])]
+        device: Option<String>,
+        /// Only models whose suggested quant fits.
+        #[arg(long)]
+        fits: bool,
+        #[arg(long, value_parser = ["chat", "embedding", "reranker"])]
+        kind: Option<String>,
+        /// Search all GGUF repos on Hugging Face instead.
+        #[arg(long)]
+        hf: bool,
+    },
+    /// Quantizations of a model with sizes and fit: catalog id, `owner/repo`
+    /// or `flm:<tag>`.
+    Show { model: String },
+    /// Download and register a model; installs a missing backend first.
+    Install {
+        /// Catalog id, Hugging Face `owner/repo`, or `flm:<tag>` (NPU).
+        model: String,
+        /// e.g. Q4_K_M [default: recommended, or the largest that fits]
+        #[arg(long, short)]
+        quant: Option<String>,
+        /// A single file of the repo instead of a quant.
+        #[arg(long, conflicts_with = "quant")]
+        file: Option<String>,
+        #[arg(long, short, value_parser = ["gpu", "cpu", "npu"])]
+        device: Option<String>,
+        /// Context length in tokens [default: from the catalog].
+        #[arg(long, short)]
+        context: Option<u32>,
+        /// Name in the API [default: derived from the model].
+        #[arg(long)]
+        name: Option<String>,
+        /// Skip the vision projector of multimodal models.
+        #[arg(long)]
+        no_vision: bool,
+        /// Start the model when done.
+        #[arg(long)]
+        run: bool,
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Remove an installed model (added through contio, not config.toml).
+    Rm {
+        model: String,
+        /// Also delete its files from contio's model directory.
+        #[arg(long)]
+        delete_files: bool,
+    },
+    /// Change launch settings of an installed model.
+    Set {
+        model: String,
+        #[arg(long)]
+        context: Option<u32>,
+        #[arg(long, conflicts_with = "unpin")]
+        pin: bool,
+        #[arg(long)]
+        unpin: bool,
+        #[arg(long, value_parser = ["gpu", "cpu"])]
+        device: Option<String>,
+        /// Unload after this many idle seconds (0 = daemon default).
+        #[arg(long)]
+        idle_ttl: Option<u64>,
+    },
     /// Load a model (and keep it loaded until idle/evicted).
     Load { model: String },
     /// Unload a model.
@@ -52,25 +120,24 @@ enum Command {
         #[arg(long)]
         show_reasoning: bool,
     },
-    /// Download a GGUF from Hugging Face (verified, resumable; HF_TOKEN for gated
-    /// repos), or a FastFlowLM NPU model with --flm.
-    Pull {
-        /// e.g. unsloth/Qwen3-8B-GGUF
-        #[arg(required_unless_present = "flm")]
-        repo: Option<String>,
-        /// e.g. Qwen3-8B-Q4_K_M.gguf
-        #[arg(required_unless_present = "flm")]
-        file: Option<String>,
-        /// FastFlowLM tag instead, e.g. qwen3-it:4b
-        #[arg(long, conflicts_with_all = ["repo", "file"])]
-        flm: Option<String>,
-        #[arg(long, default_value = "main")]
-        revision: String,
-        /// Start the job and return immediately.
-        #[arg(long)]
-        detach: bool,
+    /// Inference backends: list, install, check prerequisites.
+    Backends {
+        #[command(subcommand)]
+        action: Option<BackendsAction>,
     },
-    /// Install a backend: llama.cpp (source | prebuilt | podman) or flm (source).
+    /// Background jobs (downloads, installs).
+    Jobs,
+    /// Cancel a running job.
+    Cancel { id: u64 },
+    /// Run a failed or cancelled job again.
+    Retry { id: u64 },
+}
+
+#[derive(Debug, Subcommand)]
+enum BackendsAction {
+    /// Registered and installed backends (default).
+    List,
+    /// Install llama.cpp (source | prebuilt | podman) or FastFlowLM (source).
     Install {
         #[arg(value_parser = ["llama.cpp", "flm"])]
         backend: String,
@@ -85,12 +152,6 @@ enum Command {
         #[arg(long)]
         detach: bool,
     },
-    /// Registered and installed backends.
-    Backends,
-    /// Background jobs (downloads, installs).
-    Jobs,
-    /// Cancel a running job.
-    Cancel { id: u64 },
 }
 
 #[tokio::main]
@@ -163,41 +224,88 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             client.chat(&model, system.as_deref(), &prompt, max_tokens, show_reasoning).await?;
         }
-        Command::Pull { repo, file, flm, revision, detach } => {
-            let body = match flm {
-                Some(tag) => json!({"flm": tag}),
-                None => json!({"repo": repo, "file": file, "revision": revision}),
+        Command::Search { query, device, fits, kind, hf } => {
+            let query = query.join(" ");
+            if hf {
+                if query.is_empty() {
+                    bail!("--hf needs a search term");
+                }
+                let url = format!("/api/catalog/search?q={}", urlencode(&query));
+                let raw = client.get(&url).await?;
+                if cli.json { println!("{raw}") } else { println!("{}", format::hf_hits(&raw)) }
+            } else {
+                let raw = client.get("/api/catalog").await?;
+                let filter = format::CatalogFilter { query, device, fits, kind };
+                if cli.json { println!("{raw}") } else { println!("{}", format::catalog(&raw, &filter)) }
+            }
+        }
+        Command::Show { model } => {
+            let raw = if model.contains('/') {
+                client.get(&format!("/api/catalog/repo?repo={}", urlencode(&model))).await?
+            } else {
+                client.get(&format!("/api/catalog/models/{}", urlencode(&model))).await?
             };
-            let r = client.post("/api/models/download", &body).await?;
-            let job = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await?;
-            if let Some(result) = job.filter(|_| !cli.json) {
-                if let Some(path) = result["path"].as_str() {
-                    eprintln!("saved to {path}");
+            if cli.json { println!("{raw}") } else { println!("{}", format::detail(&raw)) }
+        }
+        Command::Install { model, quant, file, device, context, name, no_vision, run, detach } => {
+            let mut body = json!({
+                "quant": quant, "file": file, "device": device, "context": context, "id": name,
+                "no_vision": no_vision, "load": run,
+            });
+            if let Some(tag) = model.strip_prefix("flm:") {
+                body["flm"] = json!(tag);
+            } else if model.contains('/') {
+                body["repo"] = json!(model);
+            } else {
+                body["model"] = json!(model);
+            }
+            let r = client.post("/api/catalog/install", &body).await?;
+            if let Some(result) = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await? {
+                let id = result["model"].as_str().unwrap_or("?");
+                match result["kind"].as_str() {
+                    Some("embedding") => eprintln!("installed as `{id}`: POST /v1/embeddings with \"model\": \"{id}\""),
+                    Some("reranker") => eprintln!("installed as `{id}`: POST /v1/rerank with \"model\": \"{id}\""),
+                    _ => eprintln!("installed as `{id}`; try it: contio chat {id} \"hello\"  (API model name: {id})"),
                 }
-                eprintln!("\nadd to ~/.config/contio/config.toml and restart contiod:\n");
-                println!("{}", result["config_snippet"].as_str().unwrap_or_default());
             }
         }
-        Command::Install { backend, method, version, check, detach } => {
-            let pf = client.get(&format!("/api/backends/preflight?backend={backend}&method={method}")).await?;
-            if check || pf["ok"] != true {
-                println!("{}", format::preflight(&pf));
-                if pf["ok"] != true {
-                    bail!("prerequisites missing");
+        Command::Rm { model, delete_files } => {
+            let r = client.delete(&format!("/api/models/{}?delete_files={delete_files}", urlencode(&model))).await?;
+            let deleted = r["deleted_files"].as_array().map_or(0, Vec::len);
+            eprintln!("removed {model}{}", if delete_files { format!(" ({deleted} files deleted)") } else { String::new() });
+        }
+        Command::Set { model, context, pin, unpin, device, idle_ttl } => {
+            let pinned = if pin { Some(true) } else if unpin { Some(false) } else { None };
+            let body = json!({ "context": context, "pinned": pinned, "device": device, "idle_ttl_secs": idle_ttl });
+            let body = Value::Object(body.as_object().cloned().unwrap_or_default().into_iter().filter(|(_, v)| !v.is_null()).collect());
+            if body.as_object().is_some_and(|o| o.is_empty()) {
+                bail!("nothing to change (see `contio set --help`)");
+            }
+            client.patch(&format!("/api/models/{}", urlencode(&model)), &body).await?;
+            eprintln!("updated {model} (restarts on next use if it was loaded)");
+        }
+        Command::Backends { action } => match action.unwrap_or(BackendsAction::List) {
+            BackendsAction::List => {
+                let raw = client.get("/api/backends").await?;
+                if cli.json { println!("{raw}") } else { println!("{}", format::backends(&raw)) }
+            }
+            BackendsAction::Install { backend, method, version, check, detach } => {
+                let pf = client.get(&format!("/api/backends/preflight?backend={backend}&method={method}")).await?;
+                if check || pf["ok"] != true {
+                    println!("{}", format::preflight(&pf));
+                    if pf["ok"] != true {
+                        bail!("prerequisites missing");
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                let r = client
+                    .post("/api/backends/install", &json!({"backend": backend, "method": method, "version": version}))
+                    .await?;
+                if client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await?.is_some() {
+                    eprintln!("installed and registered; models using {backend} can be loaded now");
+                }
             }
-            let r = client
-                .post("/api/backends/install", &json!({"backend": backend, "method": method, "version": version}))
-                .await?;
-            if client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await?.is_some() {
-                eprintln!("installed and registered; models using {backend} can be loaded now");
-            }
-        }
-        Command::Backends => {
-            let raw = client.get("/api/backends").await?;
-            if cli.json { println!("{raw}") } else { println!("{}", format::backends(&raw)) }
-        }
+        },
         Command::Jobs => {
             let raw = client.get("/api/jobs").await?;
             if cli.json { println!("{raw}") } else { println!("{}", format::jobs(&raw)) }
@@ -206,8 +314,22 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let r = client.post(&format!("/api/jobs/{id}/cancel"), &json!({})).await?;
             eprintln!("{}", if r["cancelled"] == true { "cancellation requested" } else { "job is not running" });
         }
+        Command::Retry { id } => {
+            let r = client.post(&format!("/api/jobs/{id}/retry"), &json!({})).await?;
+            client.follow(r["job_id"].as_u64().unwrap_or_default(), false).await?;
+        }
     }
     Ok(())
+}
+
+/// Percent-encode a path or query component.
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 struct Client {
@@ -222,13 +344,19 @@ impl Client {
     }
 
     async fn post(&self, path: &str, body: &Value) -> anyhow::Result<Value> {
-        let res = self
-            .http
-            .post(format!("{}{path}", self.base))
-            .json(body)
-            .send()
-            .await
-            .with_context(|| self.unreachable())?;
+        self.send(self.http.post(format!("{}{path}", self.base)).json(body)).await
+    }
+
+    async fn patch(&self, path: &str, body: &Value) -> anyhow::Result<Value> {
+        self.send(self.http.patch(format!("{}{path}", self.base)).json(body)).await
+    }
+
+    async fn delete(&self, path: &str) -> anyhow::Result<Value> {
+        self.send(self.http.delete(format!("{}{path}", self.base))).await
+    }
+
+    async fn send(&self, req: reqwest::RequestBuilder) -> anyhow::Result<Value> {
+        let res = req.send().await.with_context(|| self.unreachable())?;
         Self::json(res).await
     }
 

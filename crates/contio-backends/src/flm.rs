@@ -129,15 +129,9 @@ mod tests {
     }
 
     fn profile() -> ModelProfile {
-        ModelProfile {
-            id: "qwen3-4b-npu".into(),
-            source: ModelSource::Flm { tag: "qwen3-it:4b".into() },
-            device: DeviceKind::Npu,
-            context: Some(8192),
-            pinned: false,
-            idle_ttl_secs: None,
-            extra_args: vec![],
-        }
+        let mut p = ModelProfile::new("qwen3-4b-npu", ModelSource::Flm { tag: "qwen3-it:4b".into() }, DeviceKind::Npu);
+        p.context = Some(8192);
+        p
     }
 
     #[test]

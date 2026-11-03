@@ -1,7 +1,5 @@
-//! `~/.config/contio/config.toml`.
-//!
-//! Until the catalog and installer exist (M2), models are registered here by
-//! hand. Paths may start with `~/`.
+//! `~/.config/contio/config.toml`: optional, hand-edited. Models installed
+//! through the API live in `registry.rs`. Paths may start with `~/`.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -122,8 +120,11 @@ impl Config {
             if !seen.insert(m.id.clone()) {
                 bail!("duplicate model id `{}`", m.id);
             }
-            if let ModelSource::Gguf { path } = &mut m.source {
+            if let ModelSource::Gguf { path, mmproj } = &mut m.source {
                 expand(path);
+                if let Some(mm) = mmproj {
+                    expand(mm);
+                }
             }
         }
         for a in &c.aliases {
@@ -231,7 +232,7 @@ upstream_model = "embed-gemma:300m"
         assert_eq!(c.models.len(), 2);
         assert_eq!(
             c.models[0].source,
-            ModelSource::Gguf { path: home.join("gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf") }
+            ModelSource::Gguf { path: home.join("gguf/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"), mmproj: None }
         );
         assert!(c.models[0].pinned);
         assert_eq!(c.models[1].device, DeviceKind::Npu);

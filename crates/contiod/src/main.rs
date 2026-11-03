@@ -3,9 +3,11 @@
 //! Owns all state; the GUI and CLI are thin clients of its management API.
 
 mod api;
+mod catalog_api;
 mod config;
 mod gateway;
 mod install_api;
+mod registry;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -69,10 +71,26 @@ async fn main() -> anyhow::Result<()> {
         "hardware detected"
     );
 
-    let installer = install_api::Installer::new(config::default_data_dir(), hw.cpu.cores);
+    let data_dir = config::default_data_dir();
+    let (installer, interrupted) = install_api::Installer::persistent(data_dir.clone(), hw.cpu.cores);
     let manager = build_manager(&config, &hw);
+    if let Some(f) = &config.backends.flm {
+        installer.set_flm(flm_config(f));
+    }
     register_installed_backends(&config, &manager, &installer);
-    tracing::info!(models = manager.profiles().len(), "model registry loaded");
+    let registry = registry::Registry::new(&data_dir);
+    registry.restore(&manager);
+    tracing::info!(
+        models = manager.profiles().len(),
+        added_via_api = manager.managed_profiles().len(),
+        "model registry loaded"
+    );
+    let catalog = catalog_api::CatalogService::new(
+        contio_catalog::Catalog::builtin(),
+        installer.http.clone(),
+        contio_catalog::hf::HF_BASE,
+        data_dir.join("cache/hf"),
+    );
     let reaper = {
         let m = manager.clone();
         tokio::spawn(async move {
@@ -85,12 +103,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let state = api::AppState::start(
-        probe,
-        manager.clone(),
-        config.aliases.clone(),
-        installer,
+        api::Services { probe, manager: manager.clone(), aliases: config.aliases.clone(), installer, catalog, registry },
         Duration::from_millis(args.metrics_interval_ms),
     );
+    install_api::resume_interrupted(&state, interrupted);
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
@@ -118,12 +134,7 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
         backends.push(Arc::new(LlamaCppBackend::new(LlamaCppConfig { runtime, cpu_threads: l.cpu_threads })));
     }
     if let Some(f) = &config.backends.flm {
-        backends.push(Arc::new(FlmBackend::new(FlmConfig {
-            prefix: f.prefix.clone(),
-            model_path: f.model_path.clone(),
-            xrt_dir: f.xrt_dir.clone(),
-            embed: f.embed,
-        })));
+        backends.push(Arc::new(FlmBackend::new(flm_config(f))));
     }
 
     let keep = 100 - u64::from(config.manager.reserve_percent);
@@ -141,7 +152,11 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
     )
 }
 
-/// Backends installed by contio (`contio install …`) are used for any kind
+fn flm_config(f: &config::FlmSection) -> FlmConfig {
+    FlmConfig { prefix: f.prefix.clone(), model_path: f.model_path.clone(), xrt_dir: f.xrt_dir.clone(), embed: f.embed }
+}
+
+/// Backends installed by contio (`contio backends install …`) are used for any kind
 /// the config doesn't set explicitly. Newest install wins.
 fn register_installed_backends(config: &Config, manager: &ModelManager, installer: &install_api::Installer) {
     let configured = |k: BackendKind| match k {
@@ -165,6 +180,6 @@ fn register_installed_backends(config: &Config, manager: &ModelManager, installe
         }
     }
     if manager.backend_names().is_empty() && !manager.profiles().is_empty() {
-        tracing::warn!("models are configured but no backend is (config or `contio install`); nothing can be loaded");
+        tracing::warn!("models are configured but no backend is; installing a model sets one up");
     }
 }

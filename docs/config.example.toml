@@ -1,5 +1,8 @@
 # contio daemon config: copy to ~/.config/contio/config.toml
-# Until the catalog/installer exists (M2), models are registered here by hand.
+# Optional: everything works without it. Models installed with
+# `contio install <model>` (or the GUI catalog) are saved by the daemon in
+# ~/.local/share/contio/models.json. Models listed here are fixed (can't be
+# changed or removed through the API) and win on id clashes.
 # Paths may start with "~/".
 
 [server]
@@ -10,9 +13,11 @@ idle_ttl_secs = 900                # unload unpinned models idle this long (0 = 
 startup_timeout_secs = 180
 reserve_percent = 10               # share of each memory pool kept free
 
-# Backends: either install them with contio (no config needed; used automatically):
-#   contio install llama.cpp --method source|prebuilt|podman
-#   contio install flm --method source
+# Backends: installed automatically when the first model needs one (method from
+# the GUI settings / PUT /api/settings; llama.cpp defaults to prebuilt), or
+# explicitly:
+#   contio backends install llama.cpp --method source|prebuilt|podman
+#   contio backends install flm --method source
 # or point at existing installs here (takes precedence over installed ones).
 
 # llama.cpp: GGUF on GPU (Vulkan) or CPU. A Vulkan build serves both.
