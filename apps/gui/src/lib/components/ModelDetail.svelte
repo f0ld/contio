@@ -10,7 +10,7 @@
   } from "$lib/daemon";
   import { jobs, refreshJobs } from "$lib/jobs.svelte";
   import FitPill from "./FitPill.svelte";
-  import type { DeviceKind, Fit, ModelDetail, QuantView } from "$lib/types";
+  import type { DeviceKind, Fit, Measured, ModelDetail, QuantView } from "$lib/types";
 
   /** A catalog id (`qwen3-8b`, `flm:<tag>`) or a Hugging Face repo. */
   let { target, onclose }: { target: { id: string } | { repo: string }; onclose: () => void } = $props();
@@ -116,6 +116,14 @@
     }
   }
 
+  /** "measured 22.5 tok/s · tools 100%" */
+  function measuredText(m: Measured): string {
+    const parts = [];
+    if (m.tg_tps != null) parts.push(`${m.tg_tps.toFixed(1)} tok/s`);
+    if (m.tools_pass_rate != null) parts.push(`tools ${Math.round(m.tools_pass_rate * 100)}%`);
+    return parts.length ? `measured: ${parts.join(" · ")}` : "";
+  }
+
   const onkey = (e: KeyboardEvent) => e.key === "Escape" && onclose();
   let progress = $derived(job?.progress?.total ? (100 * job.progress.done) / job.progress.total : null);
 </script>
@@ -165,7 +173,10 @@
                 <td class="num">{n.footprint_bytes ? formatBytes(n.footprint_bytes) : "–"}</td>
                 <td class="num">{formatContext(n.default_context)}</td>
                 <td><FitPill fit={n.fit} /></td>
-                <td class="sub">{n.installed.length ? `installed: ${n.installed.join(", ")}` : n.downloaded ? "downloaded" : ""}</td>
+                <td class="sub">
+                  {n.installed.length ? `installed: ${n.installed.join(", ")}` : n.downloaded ? "downloaded" : ""}
+                  {#each n.measured as m (m.model)}<div>{measuredText(m)}{#if m.agent_ready}<span class="tag accent">agent-ready</span>{/if}</div>{/each}
+                </td>
               </tr>
             {/each}
           </tbody>
@@ -184,7 +195,10 @@
                 <td class="num">{q.bits_per_weight?.toFixed(2) ?? "–"}</td>
                 <td>{q.tier ?? "–"}</td>
                 <td><FitPill fit={fitOf(q, device)} detail /></td>
-                <td class="sub">{q.installed.length ? `installed: ${q.installed.join(", ")}` : q.downloaded ? "downloaded" : ""}</td>
+                <td class="sub">
+                  {q.installed.length ? `installed: ${q.installed.join(", ")}` : q.downloaded ? "downloaded" : ""}
+                  {#each q.measured as m (m.model)}<div>{measuredText(m)}{#if m.agent_ready}<span class="tag accent">agent-ready</span>{/if}</div>{/each}
+                </td>
               </tr>
             {/each}
           </tbody>

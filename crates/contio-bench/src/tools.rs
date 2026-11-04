@@ -398,7 +398,12 @@ pub async fn run(
             }
             progress.step(&format!("tool calling {}/{}: {} (run {}/{reps})", i + 1, suite.cases.len(), case.id, rep + 1));
             let started = Instant::now();
-            let outcome = run_case(http, target, suite, case, &mut r.completion_tokens).await;
+            let mut tokens = 0;
+            let outcome = crate::perf::or_cancel(progress, run_case(http, target, suite, case, &mut tokens)).await;
+            r.completion_tokens += tokens;
+            if progress.cancelled() {
+                return Err("cancelled".into());
+            }
             elapsed += started.elapsed().as_secs_f64();
             r.runs += 1;
             match outcome {

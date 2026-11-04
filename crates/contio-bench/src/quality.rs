@@ -20,8 +20,14 @@ const GSM8K: &str = include_str!("../../../registry/bench/reasoning_gsm8k.json")
 const MMLU_PRO: &str = include_str!("../../../registry/bench/knowledge_mmlu_pro.json");
 const HUMANEVAL: &str = include_str!("../../../registry/bench/coding_humaneval.json");
 
-/// Thinking models reason at length before answering.
-const MAX_TOKENS: u32 = 8192;
+/// Answer budget: thinking models reason at length, and some loop. Quick runs
+/// cut them off sooner; a cut-off answer counts as a failure and is reported.
+fn max_tokens(preset: crate::Preset) -> u32 {
+    match preset {
+        crate::Preset::Quick => 4096,
+        crate::Preset::Standard | crate::Preset::Full => 8192,
+    }
+}
 /// Python for the coding sandbox (small; pulled once).
 pub const SANDBOX_IMAGE: &str = "docker.io/library/python:3.12-alpine";
 const RUN_TIMEOUT_SECS: u32 = 10;
@@ -337,7 +343,16 @@ pub async fn run(
             }
             progress.step(&format!("{} {}/{}: {} (run {}/{reps})", suite.name(), i + 1, items.len(), item.id(), rep + 1));
             let started = Instant::now();
-            let outcome = attempt(http, target, item, work_dir, &mut r.completion_tokens, &mut truncated).await;
+            let mut tokens = 0;
+            let outcome = crate::perf::or_cancel(
+                progress,
+                attempt(http, target, item, max_tokens(preset), work_dir, &mut tokens, &mut truncated),
+            )
+            .await;
+            r.completion_tokens += tokens;
+            if progress.cancelled() {
+                return Err("cancelled".into());
+            }
             elapsed += started.elapsed().as_secs_f64();
             r.runs += 1;
             match outcome {
@@ -367,6 +382,7 @@ async fn attempt(
     http: &reqwest::Client,
     target: &Target,
     item: &Item,
+    max_tokens: u32,
     work_dir: &Path,
     tokens: &mut u64,
     truncated: &mut u32,
@@ -374,7 +390,7 @@ async fn attempt(
     let body = json!({
         "model": target.model,
         "messages": [{ "role": "user", "content": item.prompt() }],
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
     });
     let res = http
         .post(format!("{}/v1/chat/completions", target.base_url))
@@ -390,7 +406,7 @@ async fn attempt(
     *tokens += resp["usage"]["completion_tokens"].as_u64().unwrap_or(0);
     if resp["choices"][0]["finish_reason"] == "length" {
         *truncated += 1;
-        return Err(format!("hit the {MAX_TOKENS}-token limit"));
+        return Err(format!("hit the {max_tokens}-token limit"));
     }
     let text = resp["choices"][0]["message"]["content"].as_str().unwrap_or_default();
     let tail = || {

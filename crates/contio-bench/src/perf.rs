@@ -121,6 +121,23 @@ pub trait Progress: Sync {
     }
 }
 
+/// Run `fut` unless the job is cancelled first. Dropping a request closes its
+/// connection, and the backend stops generating.
+pub async fn or_cancel<T>(progress: &dyn Progress, fut: impl Future<Output = Result<T, String>>) -> Result<T, String> {
+    let watch = async {
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if progress.cancelled() {
+                break;
+            }
+        }
+    };
+    tokio::select! {
+        r = fut => r,
+        () = watch => Err("cancelled".into()),
+    }
+}
+
 const IDLE_WINDOW: Duration = Duration::from_secs(2);
 /// Two calibration prompts (characters): the slope gives characters per
 /// token, the intercept the template and instruction around the filler.
@@ -146,8 +163,8 @@ pub async fn run(
     // warm-up (first-request costs like shader compilation) and calibration
     progress.step("warming up");
     let [c1, c2] = CALIBRATION_CHARS;
-    let t1 = request(http, target, &prompt(c1, u32::MAX), 8, monitor).await?.prompt_tokens;
-    let t2 = request(http, target, &prompt(c2, u32::MAX - 1), 8, monitor).await?.prompt_tokens;
+    let t1 = or_cancel(progress, request(http, target, &prompt(c1, u32::MAX), 8, monitor)).await?.prompt_tokens;
+    let t2 = or_cancel(progress, request(http, target, &prompt(c2, u32::MAX - 1), 8, monitor)).await?.prompt_tokens;
     let cal = Calibration::new((c1, t1), (c2, t2));
     report.calibration = vec![(c1, t1), (c2, t2)];
     check()?;
@@ -164,7 +181,7 @@ pub async fn run(
             progress.step(&format!("prompt {tokens} tokens, run {}/{}", rep + 1, opts.reps.max(1)));
             let text = prompt(cal.chars_for(tokens), nonce);
             nonce += 1;
-            samples.push(request(http, target, &text, opts.gen_tokens, monitor).await?);
+            samples.push(or_cancel(progress, request(http, target, &text, opts.gen_tokens, monitor)).await?);
         }
         report.prompts.push(PromptResult { target_tokens: tokens, summary: summarize(&samples), samples });
     }
@@ -177,10 +194,8 @@ pub async fn run(
         let texts: Vec<String> =
             (0..n).map(|i| prompt(cal.chars_for(tokens), nonce + i)).collect();
         let start = monitor.now();
-        let results = futures_util::future::join_all(
-            texts.iter().map(|t| request(http, target, t, opts.gen_tokens, monitor)),
-        )
-        .await;
+        let all = futures_util::future::join_all(texts.iter().map(|t| request(http, target, t, opts.gen_tokens, monitor)));
+        let results = or_cancel(progress, async { Ok(all.await) }).await?;
         let end = monitor.now();
         let samples: Vec<Sample> = results.into_iter().collect::<Result<_, _>>()?;
         let completion: u32 = samples.iter().map(|s| s.completion_tokens).sum();

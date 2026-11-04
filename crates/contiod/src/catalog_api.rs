@@ -64,6 +64,20 @@ pub struct QuantView {
     pub downloaded: bool,
     /// Ids of registered models using this quant.
     pub installed: Vec<String>,
+    /// Benchmark results of those models.
+    pub measured: Vec<Measured>,
+}
+
+/// Latest benchmark results of an installed model (spec §4.3: measured
+/// numbers next to the estimate).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Measured {
+    pub model: String,
+    pub tg_tps: Option<f64>,
+    pub pp512_tps: Option<f64>,
+    pub j_per_token: Option<f64>,
+    pub tools_pass_rate: Option<f64>,
+    pub agent_ready: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +93,7 @@ pub struct NpuView {
     pub fit: Option<Fit>,
     pub downloaded: bool,
     pub installed: Vec<String>,
+    pub measured: Vec<Measured>,
 }
 
 #[derive(Debug, Serialize)]
@@ -146,6 +161,7 @@ struct Context {
     models_dir: PathBuf,
     flm: Vec<FlmModel>,
     flm_model_dir: Option<PathBuf>,
+    measured: HashMap<String, Measured>,
 }
 
 impl Context {
@@ -162,7 +178,12 @@ impl Context {
             models_dir: state.installer.models_dir(),
             flm,
             flm_model_dir: flm_config.map(|c| c.model_path.join("models")),
+            measured: measured(&state.bench),
         }
+    }
+
+    fn measured_for(&self, ids: &[String]) -> Vec<Measured> {
+        ids.iter().filter_map(|id| self.measured.get(id).cloned()).collect()
     }
 
     fn budget(&self, device: DeviceKind) -> Option<u64> {
@@ -202,12 +223,22 @@ impl Context {
                 })
                 .map(|p| p.id.clone())
                 .collect(),
+            measured: vec![],
         }
+        .with_measured(self)
     }
 
     fn npu_view(&self, m: &FlmModel) -> NpuView {
         let budget = self.budget(DeviceKind::Npu);
+        let installed: Vec<String> = self
+            .profiles
+            .iter()
+            .filter(|p| matches!(&p.source, ModelSource::Flm { tag } if tag == &m.tag))
+            .map(|p| p.id.clone())
+            .collect();
         NpuView {
+            measured: self.measured_for(&installed),
+            installed,
             tag: m.tag.clone(),
             name: m.name.clone(),
             footprint_bytes: m.footprint_bytes,
@@ -217,12 +248,6 @@ impl Context {
             unsupported: m.is_transcription(),
             fit: m.footprint_bytes.zip(budget).map(|(need, b)| fit(need, b)),
             downloaded: self.flm_model_dir.as_ref().is_some_and(|d| d.join(&m.name).is_dir()),
-            installed: self
-                .profiles
-                .iter()
-                .filter(|p| matches!(&p.source, ModelSource::Flm { tag } if tag == &m.tag))
-                .map(|p| p.id.clone())
-                .collect(),
         }
     }
 
@@ -234,6 +259,37 @@ impl Context {
     fn unlinked_flm<'a>(&'a self, catalog: &'a Catalog) -> impl Iterator<Item = &'a FlmModel> {
         self.flm.iter().filter(|m| !catalog.models.iter().any(|c| c.flm.contains(&m.tag)))
     }
+}
+
+impl QuantView {
+    fn with_measured(mut self, ctx: &Context) -> Self {
+        self.measured = ctx.measured_for(&self.installed);
+        self
+    }
+}
+
+/// Latest finished speed and tool-calling results per model id.
+fn measured(store: &contio_bench::store::Store) -> HashMap<String, Measured> {
+    use contio_bench::store::{Filter, RunStatus};
+    let mut out: HashMap<String, Measured> = HashMap::new();
+    // newest first: the first value seen per (model, metric) wins
+    for r in store.list(&Filter::default()).unwrap_or_default().into_iter().filter(|r| r.status == RunStatus::Done) {
+        let m = out.entry(r.model.clone()).or_insert_with(|| Measured { model: r.model.clone(), ..Default::default() });
+        let get = |k: &str| r.metrics.get(k).copied();
+        match r.suite.as_str() {
+            "perf" if m.tg_tps.is_none() => {
+                m.tg_tps = get("tg_tps");
+                m.pp512_tps = get("pp512_tps");
+                m.j_per_token = get("j_per_token");
+            }
+            "tools" if m.tools_pass_rate.is_none() => {
+                m.tools_pass_rate = get("tools_pass_rate");
+                m.agent_ready = get("agent_ready").map(|v| v >= 1.0);
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Per-model inputs to the fit estimate.
@@ -981,6 +1037,7 @@ mod tests {
             recommended,
             downloaded: false,
             installed: vec![],
+            measured: vec![],
         }
     }
 

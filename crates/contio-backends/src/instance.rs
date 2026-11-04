@@ -145,6 +145,9 @@ pub fn stop_orphans(log_dir: &Path) -> Vec<u32> {
         if recorded.is_empty() || running != recorded {
             continue; // gone, or the pid now belongs to something else
         }
+        if parent_is_contiod(pid) {
+            continue; // another contiod (still shutting down, or a second instance) owns it
+        }
         tracing::warn!(pid, file = %path.display(), "stopping a backend left over from a previous run");
         // its own process group (see `spawn`): also reaches podman's children
         let group = Pid::from_raw(-(pid as i32));
@@ -159,6 +162,12 @@ pub fn stop_orphans(log_dir: &Path) -> Vec<u32> {
         stopped.push(pid);
     }
     stopped
+}
+
+fn parent_is_contiod(pid: u32) -> bool {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+    let ppid = status.lines().find_map(|l| l.strip_prefix("PPid:")).map(str::trim).unwrap_or("0");
+    std::fs::read_to_string(format!("/proc/{ppid}/comm")).is_ok_and(|c| c.trim() == "contiod")
 }
 
 /// An unused localhost port. Racy by nature (the port is released before the

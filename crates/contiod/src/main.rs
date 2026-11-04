@@ -132,13 +132,33 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("binding {listen}"))?;
     tracing::info!("listening on http://{listen} (OpenAI API at http://{listen}/v1)");
 
-    axum::serve(listener, api::router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let jobs = state.installer.jobs.clone();
+    let stop = Arc::new(tokio::sync::Notify::new());
+    let stopped = stop.clone();
+    let serve = axum::serve(listener, api::router(state)).with_graceful_shutdown(async move { stopped.notified().await });
+    let signal = async {
+        shutdown_signal().await;
+        // benchmarks keep requests open against our own endpoint; downloads
+        // and builds are left to resume on the next start
+        for j in jobs.list() {
+            if j.kind == "bench" && j.state == contio_install::jobs::JobState::Running {
+                jobs.cancel(j.id);
+            }
+        }
+        stop.notify_one();
+        tokio::time::sleep(SHUTDOWN_GRACE).await;
+    };
+    tokio::select! {
+        r = serve.into_future() => r?,
+        () = signal => tracing::warn!("requests still open after {}s; closing them", SHUTDOWN_GRACE.as_secs()),
+    }
     reaper.abort();
     manager.shutdown().await;
     Ok(())
 }
+
+/// How long open requests (streams) may finish after a shutdown signal.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 /// Ctrl-C, SIGTERM (systemd, `kill`) or SIGHUP (terminal closed): all stop
 /// the backends in order.

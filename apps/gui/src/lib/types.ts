@@ -134,6 +134,17 @@ export interface QuantView {
   recommended: boolean;
   downloaded: boolean;
   installed: string[];
+  measured: Measured[];
+}
+
+/** Latest benchmark results of an installed model. */
+export interface Measured {
+  model: string;
+  tg_tps: number | null;
+  pp512_tps: number | null;
+  j_per_token: number | null;
+  tools_pass_rate: number | null;
+  agent_ready: boolean | null;
 }
 
 export interface NpuView {
@@ -147,6 +158,7 @@ export interface NpuView {
   fit: Fit | null;
   downloaded: boolean;
   installed: string[];
+  measured: Measured[];
 }
 
 export interface RepoFile {

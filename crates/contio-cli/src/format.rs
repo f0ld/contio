@@ -523,13 +523,24 @@ pub fn detail(d: &Value) -> String {
                     None => "-".into(),
                 }
             };
-            let status = if !strings(&q["installed"]).is_empty() {
+            let mut status = if !strings(&q["installed"]).is_empty() {
                 format!("installed: {}", strings(&q["installed"]).join(", "))
             } else if q["downloaded"] == true {
                 "downloaded".into()
             } else {
                 String::new()
             };
+            for m in q["measured"].as_array().into_iter().flatten() {
+                if let Some(t) = m["tg_tps"].as_f64() {
+                    status.push_str(&format!(" · {t:.1} tok/s"));
+                }
+                if let Some(p) = m["tools_pass_rate"].as_f64() {
+                    status.push_str(&format!(" · tools {:.0}%", p * 100.0));
+                }
+                if m["agent_ready"] == true {
+                    status.push_str(" · agent-ready");
+                }
+            }
             [
                 label,
                 gib(q["size"].as_u64().unwrap_or(0)),
