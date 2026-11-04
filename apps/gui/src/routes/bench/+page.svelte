@@ -132,6 +132,32 @@
   }
 
   let perfRuns = $derived(latest("perf"));
+
+  const fileOf = (r: BenchRun) => {
+    const src = r.target.source;
+    return src && "path" in src ? src.path.split("/").pop() : src && "tag" in src ? src.tag : undefined;
+  };
+  /** Same model in several variants (device, quant, settings): its catalog entry, or its weights file. */
+  let variants = $derived.by(() => {
+    // config.toml models have no catalog origin; borrow it from a run of the same file
+    const catalogOf = new Map<string, string>();
+    for (const r of perfRuns) {
+      const f = fileOf(r);
+      if (f && r.target.origin?.catalog) catalogOf.set(f, r.target.origin.catalog);
+    }
+    const key = (r: BenchRun) => r.target.origin?.catalog ?? catalogOf.get(fileOf(r) ?? "") ?? fileOf(r) ?? r.model;
+    const groups = new Map<string, BenchRun[]>();
+    for (const r of perfRuns) groups.set(key(r), [...(groups.get(key(r)) ?? []), r]);
+    return [...groups.entries()].filter(([, rs]) => rs.length > 1);
+  });
+  const variantBars = (rs: BenchRun[], metric: string): Bar[] =>
+    rs
+      .filter((r) => r.metrics[metric] != null)
+      .map((r) => ({
+        label: [r.target.device?.toUpperCase(), r.target.origin?.quant !== "none" ? r.target.origin?.quant : null].filter(Boolean).join(" ") || r.model,
+        sub: r.model,
+        value: r.metrics[metric],
+      }));
   let toolRuns = $derived(latest("tools"));
   let qualityRuns = $derived(Object.fromEntries(QUALITY.map((s) => [s, latest(s)])) as Record<BenchSuite, BenchRun[]>);
   /** Models with a speed and a tool-calling result. */
@@ -227,6 +253,22 @@
       <BarChart title="Energy per generated token" unit="J" digits={2} lowerIsBetter bars={bars(perfRuns, "j_per_token")} />
       <BarChart title="Load time" unit="s" lowerIsBetter bars={bars(perfRuns, "load_s")} />
     </div>
+  </section>
+{/if}
+
+{#if variants.length}
+  <section class="card">
+    <div class="head">
+      <h2>Variants of the same model</h2>
+      <span class="sub">devices, quants and settings side by side</span>
+    </div>
+    {#each variants as [key, rs] (key)}
+      <h3>{key}</h3>
+      <div class="charts">
+        <BarChart title="Generation" unit="tok/s" bars={variantBars(rs, "tg_tps")} />
+        <BarChart title="Energy per generated token" unit="J" digits={2} lowerIsBetter bars={variantBars(rs, "j_per_token")} />
+      </div>
+    {/each}
   </section>
 {/if}
 
@@ -476,6 +518,10 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
     gap: 1.25rem 2rem;
+  }
+  h3 {
+    font-size: 0.95rem;
+    margin: 0.8rem 0 0.4rem;
   }
   .warn {
     color: var(--warn);

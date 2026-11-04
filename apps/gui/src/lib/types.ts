@@ -315,6 +315,7 @@ export interface BenchRun {
   target: {
     device?: DeviceKind;
     thinking?: boolean | null;
+    source?: ModelSource;
     backend?: string;
     context?: number | null;
     origin?: ModelOrigin | null;

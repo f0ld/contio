@@ -154,6 +154,9 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
             }
             let sub = if n > 1 { ctx.with_prefix(&format!("[{}/{n} {name}] ", i + 1)) } else { ctx.clone() };
             for &suite in req.suites.iter().filter(|s| s.applies_to(*kind)) {
+                if ctx.is_cancelled() {
+                    break;
+                }
                 runs.push(run_suite(&st, id, name, suite, &req, &sub).await);
             }
         }
