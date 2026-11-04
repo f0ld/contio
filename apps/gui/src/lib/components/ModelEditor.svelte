@@ -23,8 +23,8 @@
   let newAlias = $state("");
 
   let mine = $derived(aliases.filter((a) => a.model === model.id));
-  const movable = initial.source.format === "gguf";
-  const file = initial.source.format === "gguf" ? initial.source.path : `FastFlowLM ${initial.source.tag}`;
+  const movable = initial.source.format !== "flm";
+  const file = initial.source.format === "flm" ? `FastFlowLM ${initial.source.tag}` : initial.source.path;
 
   function changes(): ModelPatch {
     const p: ModelPatch = {};
@@ -70,11 +70,13 @@
 
   {#if model.managed}
     <div class="grid">
-      <label>
-        Context
-        <input type="number" min="512" step="1024" bind:value={context} placeholder="backend default" />
-        <span class="sub">{formatContext(context)}</span>
-      </label>
+      {#if model.kind !== "transcription"}
+        <label>
+          Context
+          <input type="number" min="512" step="1024" bind:value={context} placeholder="backend default" />
+          <span class="sub">{formatContext(context)}</span>
+        </label>
+      {/if}
       <label>
         Device
         {#if movable}

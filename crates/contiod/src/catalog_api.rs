@@ -10,7 +10,7 @@ use axum::Json;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::response::{IntoResponse, Response};
 use contio_backends::{FlmBackend, ModelManager};
-use contio_catalog::fit::{Fit, Verdict, fit, fit_gguf};
+use contio_catalog::fit::{Fit, Verdict, fit, fit_gguf, fit_whisper};
 use contio_catalog::flm::{FlmModel, PLATFORM_XDNA2, parse_model_list};
 use contio_catalog::hf::{HfClient, LISTING_TTL, RepoInfo, valid_repo};
 use contio_catalog::quant::{Quant, RepoFile, RepoListing, bits_per_weight, quality_tier};
@@ -19,7 +19,7 @@ use contio_core::hw::{DeviceKind, MemoryPoolKind};
 use contio_core::model::{KvGeometry, ModelKind, ModelOrigin, ModelProfile, ModelSource};
 use contio_install::download::{self, Remote};
 use contio_install::jobs::JobCtx;
-use contio_install::{BackendKind, FLM_DEFAULT_VERSION, LLAMACPP_DEFAULT_VERSION};
+use contio_install::{BackendKind, FLM_DEFAULT_VERSION, LLAMACPP_DEFAULT_VERSION, WHISPER_DEFAULT_VERSION};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -172,7 +172,12 @@ impl Context {
 
     fn quant_view(&self, repo: &str, q: &Quant, model: ModelInfo<'_>, recommended: Option<&str>) -> QuantView {
         let weights = q.size + model.mmproj_size;
-        let fit_on = |d| self.budget(d).map(|b| fit_gguf(weights, model.kv, model.context, b));
+        let fit_on = |d| {
+            self.budget(d).map(|b| match model.kind {
+                ModelKind::Transcription => fit_whisper(weights, b),
+                _ => fit_gguf(weights, model.kv, model.context, b),
+            })
+        };
         let bpw = model.params.and_then(|p| bits_per_weight(q.size, p));
         let first_name = file_name(&q.files[0].path);
         QuantView {
@@ -192,8 +197,7 @@ impl Context {
                         o.repo.as_deref() == Some(repo) && o.quant.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&q.label))
                     });
                     // models from config.toml have no origin: match the file name
-                    let by_file = matches!(&p.source, ModelSource::Gguf { path, .. }
-                        if path.file_name().is_some_and(|n| n.to_string_lossy() == first_name));
+                    let by_file = p.source.path().and_then(|path| path.file_name()).is_some_and(|n| n.to_string_lossy() == first_name);
                     by_origin || (p.origin.is_none() && by_file)
                 })
                 .map(|p| p.id.clone())
@@ -235,6 +239,7 @@ impl Context {
 /// Per-model inputs to the fit estimate.
 #[derive(Clone, Copy)]
 struct ModelInfo<'a> {
+    kind: ModelKind,
     kv: Option<&'a KvGeometry>,
     params: Option<u64>,
     context: u32,
@@ -280,8 +285,9 @@ fn detail_for(ctx: &Context, m: &CatalogModel, listing: Result<RepoListing, Stri
     let mmproj = listing.preferred_mmproj().cloned();
     let max = g.and_then(|g| g.context_length);
     let info = ModelInfo {
+        kind: m.kind,
         kv: g.map(|g| &g.kv),
-        params: g.and_then(|g| g.params),
+        params: m.params(),
         context: fit_context(context, m.default_context(), max),
         mmproj_size: mmproj.as_ref().map_or(0, |f| f.size),
     };
@@ -371,13 +377,15 @@ pub struct RefreshQuery {
 pub async fn overview(State(state): State<AppState>, Query(q): Query<RefreshQuery>) -> Response {
     let ttl = if q.refresh { std::time::Duration::ZERO } else { LISTING_TTL };
     let svc = state.catalog.clone();
-    let repos: Vec<String> = svc.catalog.models.iter().map(|m| m.repo.clone()).collect();
-    let listings: HashMap<String, Result<RepoListing, String>> =
+    let mut repos: Vec<String> = svc.catalog.models.iter().map(|m| m.repo.clone()).collect();
+    repos.sort_unstable();
+    repos.dedup(); // the Whisper models share one repo
+    let trees: HashMap<String, Result<Vec<RepoFile>, String>> =
         futures_util::stream::iter(repos)
             .map(|repo| {
                 let hf = svc.hf.clone();
                 async move {
-                    let l = hf.listing(&repo, ttl).await;
+                    let l = hf.files(&repo, ttl).await;
                     (repo, l)
                 }
             })
@@ -389,7 +397,14 @@ pub async fn overview(State(state): State<AppState>, Query(q): Query<RefreshQuer
         .catalog
         .models
         .iter()
-        .map(|m| summary(detail_for(&ctx, m, listings.get(&m.repo).cloned().unwrap_or_else(|| Err("not listed".into())), None)))
+        .map(|m| {
+            let listing = match trees.get(&m.repo) {
+                Some(Ok(files)) => Ok(m.listing(files)),
+                Some(Err(e)) => Err(e.clone()),
+                None => Err("not listed".into()),
+            };
+            summary(detail_for(&ctx, m, listing, None))
+        })
         .collect();
     let mut families = svc.catalog.families.clone();
     let npu_only: Vec<ModelSummary> = ctx.unlinked_flm(&svc.catalog).map(|f| summary(npu_detail(&ctx, f))).collect();
@@ -427,7 +442,7 @@ pub async fn model_detail(
         };
     }
     let Some(m) = state.catalog.catalog.model(&id) else { return not_found(&format!("`{id}` is not in the catalog")) };
-    let listing = state.catalog.hf.listing(&m.repo, LISTING_TTL).await;
+    let listing = state.catalog.hf.files(&m.repo, LISTING_TTL).await.map(|files| m.listing(&files));
     Json(detail_for(&ctx, m, listing, q.context)).into_response()
 }
 
@@ -484,6 +499,7 @@ fn repo_view(
     let max = info.as_ref().and_then(|i| i.context_length);
     let default = max.unwrap_or(u32::MAX).min(contio_core::model::DEFAULT_CONTEXT);
     let model = ModelInfo {
+        kind: ModelKind::Chat,
         kv: None,
         params: info.as_ref().and_then(|i| i.params),
         context: fit_context(requested, default, max),
@@ -638,6 +654,7 @@ async fn ensure_backend(state: &AppState, kind: BackendKind, ctx: &JobCtx) -> Re
     let (name, method, version) = match kind {
         BackendKind::LlamaCpp => ("llama.cpp", state.registry.settings().llamacpp_method, LLAMACPP_DEFAULT_VERSION),
         BackendKind::Flm => ("FastFlowLM", state.registry.settings().flm_method, FLM_DEFAULT_VERSION),
+        BackendKind::Whisper => ("whisper.cpp", state.registry.settings().whisper_method, WHISPER_DEFAULT_VERSION),
     };
     if state.manager.has_backend(name) {
         return Ok(());
@@ -658,7 +675,10 @@ async fn install_gguf(
     let device = req.device.unwrap_or(DeviceKind::Gpu);
     ctx.step("looking up files");
     let hf = &state.catalog.hf;
-    let listing = hf.listing(&repo, LISTING_TTL).await?;
+    let listing = match entry {
+        Some(e) => e.listing(&hf.files(&repo, LISTING_TTL).await?),
+        None => hf.listing(&repo, LISTING_TTL).await?,
+    };
     let (label, files) = match (&req.file, &req.quant) {
         (Some(file), _) => match listing.quants.iter().find(|q| q.files.iter().any(|f| &f.path == file)) {
             Some(q) => (q.label.clone(), q.files.clone()),
@@ -689,8 +709,9 @@ async fn install_gguf(
         }
     };
     let mmproj = if req.no_vision { None } else { listing.preferred_mmproj().cloned() };
+    let speech = entry.is_some_and(|e| e.ggml.is_some());
 
-    ensure_backend(state, BackendKind::LlamaCpp, ctx).await?;
+    ensure_backend(state, if speech { BackendKind::Whisper } else { BackendKind::LlamaCpp }, ctx).await?;
 
     let downloads: Vec<&RepoFile> = files.iter().chain(mmproj.as_ref()).collect();
     let n = downloads.len();
@@ -709,12 +730,16 @@ async fn install_gguf(
     }
 
     let base = entry.map_or_else(|| repo_base_id(&repo), |e| e.id.clone());
+    let path = hf_path(&models_dir, &repo, &files[0].path);
+    if speech {
+        let mut profile = ModelProfile::new(String::new(), ModelSource::Whisper { path }, device);
+        profile.kind = ModelKind::Transcription;
+        profile.origin = Some(ModelOrigin { catalog: entry.map(|e| e.id.clone()), repo: Some(repo), quant: Some(label.clone()) });
+        return register(state, profile, req.id.as_deref(), &base, &label, ctx);
+    }
     let mut profile = ModelProfile::new(
         String::new(),
-        ModelSource::Gguf {
-            path: hf_path(&models_dir, &repo, &files[0].path),
-            mmproj: mmproj.as_ref().map(|m| hf_path(&models_dir, &repo, &m.path)),
-        },
+        ModelSource::Gguf { path, mmproj: mmproj.as_ref().map(|m| hf_path(&models_dir, &repo, &m.path)) },
         device,
     );
     let geometry = entry.and_then(|e| e.geometry.as_ref());
@@ -738,7 +763,10 @@ async fn install_npu(
     let listed = Context::new(state).flm.into_iter().find(|m| m.tag == tag);
     let Some(listed) = listed else { return Err(format!("FastFlowLM has no model `{tag}` for this NPU")) };
     if listed.is_transcription() {
-        return Err(format!("{tag} is a speech model; contio doesn't serve transcription yet"));
+        return Err(format!(
+            "FastFlowLM runs {tag} only next to an NPU LLM: set `asr = true` under [backends.flm] and add an alias \
+             with upstream_model = \"{tag}\", or install the whisper.cpp version for GPU/CPU"
+        ));
     }
     ctx.step("flm pull");
     let mut cmd = FlmBackend::new(flm).flm_command().map_err(|e| e.to_string())?;
@@ -826,15 +854,18 @@ pub async fn remove_model(
 }
 
 fn delete_files(manager: &ModelManager, models_dir: &Path, removed: &ModelProfile) -> Vec<PathBuf> {
-    let ModelSource::Gguf { path, mmproj } = &removed.source else { return vec![] };
+    let files = match &removed.source {
+        ModelSource::Gguf { path, mmproj } => shard_paths(path).into_iter().chain(mmproj.clone()).collect(),
+        ModelSource::Whisper { path } => vec![path.clone()],
+        ModelSource::Flm { .. } => return vec![],
+    };
     let in_use = |p: &Path| {
         manager.profiles().iter().any(|o| match &o.source {
             ModelSource::Gguf { path: a, mmproj: b } => a == p || b.as_deref() == Some(p),
+            ModelSource::Whisper { path: a } => a == p,
             ModelSource::Flm { .. } => false,
         })
     };
-    let mut files = shard_paths(path);
-    files.extend(mmproj.clone());
     let mut deleted = Vec::new();
     for f in files {
         if f.starts_with(models_dir) && !in_use(&f) && std::fs::remove_file(&f).is_ok() {
@@ -900,9 +931,9 @@ pub async fn update_model(
         p.idle_ttl_secs = (t > 0).then_some(t);
     }
     if let Some(d) = patch.device {
-        let gguf = matches!(p.source, ModelSource::Gguf { .. });
-        if !gguf || !matches!(d, DeviceKind::Gpu | DeviceKind::Cpu) {
-            return bad_request("only GGUF models can move, and only between gpu and cpu");
+        let local = !matches!(p.source, ModelSource::Flm { .. });
+        if !local || !matches!(d, DeviceKind::Gpu | DeviceKind::Cpu) {
+            return bad_request("only GGUF and Whisper models can move, and only between gpu and cpu");
         }
         p.device = d;
     }

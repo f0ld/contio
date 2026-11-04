@@ -10,6 +10,7 @@ mod flm;
 mod instance;
 mod llamacpp;
 mod manager;
+mod whisper;
 
 use std::path::PathBuf;
 
@@ -20,6 +21,7 @@ pub use flm::{FlmBackend, FlmConfig};
 pub use instance::{Instance, stop_orphans};
 pub use llamacpp::{LlamaCppBackend, LlamaCppConfig, LlamaRuntime};
 pub use manager::{Lease, ManagerConfig, ModelManager};
+pub use whisper::{WHISPER_INFERENCE_PATH, WhisperBackend, WhisperConfig};
 
 /// Knows how to launch one kind of inference server.
 pub trait Backend: Send + Sync {

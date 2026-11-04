@@ -22,6 +22,8 @@ pub struct FlmConfig {
     pub xrt_dir: PathBuf,
     /// Co-load the embedding model next to every LLM (`--embed 1`, m0-gpu.md §4).
     pub embed: bool,
+    /// Co-load Whisper (`--asr 1`): FLM serves speech only next to an LLM.
+    pub asr: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -37,7 +39,7 @@ impl FlmBackend {
     fn tag(profile: &ModelProfile) -> Option<&str> {
         match &profile.source {
             ModelSource::Flm { tag } => Some(tag),
-            ModelSource::Gguf { .. } => None,
+            ModelSource::Gguf { .. } | ModelSource::Whisper { .. } => None,
         }
     }
 
@@ -53,6 +55,9 @@ impl FlmBackend {
         }
         if self.config.embed {
             a.extend(["--embed".into(), "1".into()]);
+        }
+        if self.config.asr {
+            a.extend(["--asr".into(), "1".into()]);
         }
         a.extend(profile.extra_args.iter().cloned());
         a
@@ -125,6 +130,7 @@ mod tests {
             model_path: "/data/flm".into(),
             xrt_dir: "/opt/xilinx/xrt".into(),
             embed,
+            asr: false,
         })
     }
 

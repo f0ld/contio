@@ -133,7 +133,8 @@
       <h2>{detail.name}</h2>
       <p class="sub">
         {#if detail.repo}<a href="https://huggingface.co/{detail.repo}" target="_blank" rel="noreferrer">{detail.repo}</a> ·{/if}
-        {formatParams(detail.params, detail.active_b)} · {detail.kind} · up to {formatContext(detail.context_length)} context
+        {formatParams(detail.params, detail.active_b)} · {detail.kind === "transcription" ? "speech to text" : detail.kind}
+        {#if detail.kind !== "transcription"}· up to {formatContext(detail.context_length)} context{/if}
       </p>
       <p>
         {#each detail.capabilities as c (c)}<span class="tag accent">{c}</span>{/each}
@@ -159,7 +160,7 @@
                 <td>
                   <code>{n.tag}</code>
                   {#if n.single_turn}<span class="tag">single-turn</span>{/if}
-                  {#if n.unsupported}<span class="tag">not served yet</span>{/if}
+                  {#if n.unsupported}<span class="tag" title="Set asr = true under [backends.flm] in config.toml; FastFlowLM serves Whisper next to an NPU LLM">needs asr = true</span>{/if}
                 </td>
                 <td class="num">{n.footprint_bytes ? formatBytes(n.footprint_bytes) : "–"}</td>
                 <td class="num">{formatContext(n.default_context)}</td>
@@ -189,17 +190,20 @@
           </tbody>
         </table>
         <p class="sub">
-          Memory at {formatContext(detail.fit_context)} context{refitting ? " (updating…)" : ""}{detail.mmproj ? `, vision projector included (${formatBytes(detail.mmproj.size)})` : ""}.
+          {#if detail.kind === "transcription"}Memory for 30-second audio windows.{:else}
+          Memory at {formatContext(detail.fit_context)} context{refitting ? " (updating…)" : ""}{detail.mmproj ? `, vision projector included (${formatBytes(detail.mmproj.size)})` : ""}.{/if}
           Fit compares against {device === "cpu" ? "system" : "GPU"} memory minus the reserve.
         </p>
       {/if}
 
       {#if devices.length}
         <div class="row options">
-          <label>
-            Context <input type="number" min="512" max={detail.context_length ?? undefined} step="1024" bind:value={context} />
-            {#if detail.context_length}<span class="sub">max {formatContext(detail.context_length)}</span>{/if}
-          </label>
+          {#if detail.kind !== "transcription"}
+            <label>
+              Context <input type="number" min="512" max={detail.context_length ?? undefined} step="1024" bind:value={context} />
+              {#if detail.context_length}<span class="sub">max {formatContext(detail.context_length)}</span>{/if}
+            </label>
+          {/if}
           <label>API name <input placeholder="automatic" bind:value={name} /></label>
           <label><input type="checkbox" bind:checked={run} /> start when done</label>
           <button class="primary" disabled={!!job && job.state === "running"} onclick={install}>
@@ -222,7 +226,7 @@
           {#if job.state === "done"}
             <p>
               Installed as <code>{String(job.result?.model ?? "")}</code>. Use that name as <code>model</code> in the
-              API{#if job.result?.kind === "chat"}, <a href="/playground?model={encodeURIComponent(String(job.result?.model ?? ""))}">try it in the
+              API{#if job.result?.kind === "chat" || job.result?.kind === "transcription"}, <a href="/playground?model={encodeURIComponent(String(job.result?.model ?? ""))}">try it in the
                 playground</a>{/if}, or manage it on the <a href="/">dashboard</a>.
             </p>
           {/if}

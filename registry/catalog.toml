@@ -107,6 +107,13 @@ vendor = "various"
 license = "various"
 summary = "Cross-encoders that reorder search results (/v1/rerank)."
 
+[[families]]
+id = "speech"
+name = "Whisper (speech to text)"
+vendor = "OpenAI"
+license = "MIT"
+summary = "Transcription and translation to English (/v1/audio/transcriptions) via whisper.cpp; large-v3-turbo also on the NPU."
+
 # --- Qwen -----------------------------------------------------------------------
 
 [[models]]
@@ -552,3 +559,96 @@ repo = "gpustack/bge-reranker-v2-m3-GGUF"
 kind = "reranker"
 recommended = "Q8_0"
 context = 8192
+
+# --- Whisper (whisper.cpp GGML files, one repo; `ggml` = file stem) ------------
+
+[[models]]
+id = "whisper-large-v3-turbo"
+family = "speech"
+name = "Whisper Large v3 Turbo"
+repo = "ggerganov/whisper.cpp"
+ggml = "large-v3-turbo"
+kind = "transcription"
+params_b = 0.809
+recommended = "Q8_0"
+tags = ["multilingual"]
+flm = ["whisper-v3:turbo"]
+notes = "Near large-v3 accuracy at ~8x the speed: the default for transcription. Does not translate (use small, medium or large-v3). On the NPU it runs next to an LLM (set asr = true for FastFlowLM)."
+
+[[models]]
+id = "whisper-large-v3"
+family = "speech"
+name = "Whisper Large v3"
+repo = "ggerganov/whisper.cpp"
+ggml = "large-v3"
+kind = "transcription"
+params_b = 1.55
+recommended = "Q5_0"
+tags = ["multilingual"]
+notes = "Most accurate and slowest; the best choice for translating speech to English."
+
+[[models]]
+id = "whisper-medium"
+family = "speech"
+name = "Whisper Medium"
+repo = "ggerganov/whisper.cpp"
+ggml = "medium"
+kind = "transcription"
+params_b = 0.769
+recommended = "Q8_0"
+tags = ["multilingual"]
+
+[[models]]
+id = "whisper-small"
+family = "speech"
+name = "Whisper Small"
+repo = "ggerganov/whisper.cpp"
+ggml = "small"
+kind = "transcription"
+params_b = 0.244
+recommended = "Q8_0"
+tags = ["multilingual"]
+
+[[models]]
+id = "whisper-small.en"
+family = "speech"
+name = "Whisper Small (English)"
+repo = "ggerganov/whisper.cpp"
+ggml = "small.en"
+kind = "transcription"
+params_b = 0.244
+recommended = "Q8_0"
+notes = "English only; more accurate on English than the multilingual small."
+
+[[models]]
+id = "whisper-base"
+family = "speech"
+name = "Whisper Base"
+repo = "ggerganov/whisper.cpp"
+ggml = "base"
+kind = "transcription"
+params_b = 0.074
+recommended = "Q8_0"
+tags = ["multilingual"]
+
+[[models]]
+id = "whisper-base.en"
+family = "speech"
+name = "Whisper Base (English)"
+repo = "ggerganov/whisper.cpp"
+ggml = "base.en"
+kind = "transcription"
+params_b = 0.074
+recommended = "Q8_0"
+
+[[models]]
+id = "whisper-tiny"
+family = "speech"
+name = "Whisper Tiny"
+repo = "ggerganov/whisper.cpp"
+ggml = "tiny"
+kind = "transcription"
+params_b = 0.039
+recommended = "Q8_0"
+tags = ["multilingual"]
+notes = "For quick drafts and slow machines; noticeably less accurate."

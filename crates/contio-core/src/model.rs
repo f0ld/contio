@@ -19,6 +19,18 @@ pub enum ModelSource {
     },
     /// A FastFlowLM model tag, e.g. `qwen3:8b` (NPU).
     Flm { tag: String },
+    /// A whisper.cpp GGML model, e.g. `ggml-large-v3-turbo-q8_0.bin`.
+    Whisper { path: PathBuf },
+}
+
+impl ModelSource {
+    /// The local weights file, if the model has one.
+    pub fn path(&self) -> Option<&PathBuf> {
+        match self {
+            Self::Gguf { path, .. } | Self::Whisper { path } => Some(path),
+            Self::Flm { .. } => None,
+        }
+    }
 }
 
 /// What a model is served for; decides the backend's mode and API routes.
@@ -31,6 +43,8 @@ pub enum ModelKind {
     Embedding,
     /// `/v1/rerank`
     Reranker,
+    /// `/v1/audio/transcriptions` (speech to text)
+    Transcription,
 }
 
 /// KV cache size per token of context, from the GGUF header
@@ -68,6 +82,12 @@ pub fn estimate_memory(weight_bytes: u64, kv: Option<&KvGeometry>, context: Opti
     // compute buffers grow with model width; ~3% of the weights, at least 384 MiB
     let buffers = (weight_bytes * 3 / 100).max(384 * MIB);
     weight_bytes + kv_bytes + buffers
+}
+
+/// Resident memory of a whisper.cpp model: weights plus encoder/decoder
+/// buffers (~300 MiB for large-v3-turbo with 30 s windows).
+pub fn estimate_whisper_memory(weight_bytes: u64) -> u64 {
+    weight_bytes + (weight_bytes / 5).max(256 * MIB)
 }
 
 /// Where an installed model came from (shown in the GUI, used for updates).

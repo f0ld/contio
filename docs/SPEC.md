@@ -355,7 +355,7 @@ contio serve                            # run daemon in foreground
 - [x] Backend installers with preflight (`dnf install` hint): llama.cpp **source** (Vulkan, ~2 min), **prebuilt** (GitHub release, sha256 digest, smoke test), **podman** (nearest available `server-vulkan-bN` image); FastFlowLM **source**. Installs are discovered at startup and registered live after install.
 - [x] Verified end-to-end in an isolated data dir: all four install paths, download cancel/resume, GPU/CPU chat on each llama.cpp runtime (incl. inside the container), NPU chat + embeddings on a contio-installed FLM.
 
-**M2: in progress** (branch `m2-catalog`):
+**M2: done** (branch `m2-catalog`):
 - [x] Curated catalog (`registry/catalog.toml`): 47 models in 13 families (chat, vision, code, embeddings, rerankers). Every GGUF quant of each repo is listed live from Hugging Face (cached 24 h on disk, stale cache used offline); draft/MTP heads, imatrix files and incomplete shard sets are filtered out.
 - [x] Fit estimator: weights + projector + KV cache (exact per-token geometry from the GGUF headers in `registry/geometry.json`: sliding-window, hybrid linear attention, MLA, shared-KV layers) + compute buffers against each pool's budget → fits / tight / too big. Bits per weight and a quality tier per quant.
 - [x] NPU catalog from FastFlowLM's `model_list.json` (XDNA2 entries), linked to curated models where they match; FLM-only models in their own family.
@@ -367,12 +367,15 @@ contio serve                            # run daemon in foreground
 - [x] GUI: navigation; Catalog (filters, family groups, fit badges, Hugging Face search, detail dialog with quant/device picker and install); Jobs (progress, logs, cancel/retry); Backends (setup wizard: method choice saved as the default, prerequisite check with copyable `dnf` command, install); model removal on the dashboard. Deep link `/catalog?model=<id>`.
 - [x] CLI: `search [--hf]`, `show`, `install`, `rm`, `set`, `retry`, `backends [install]`.
 - [x] Verified on the Framework 13 in an isolated data dir: catalog/vision/embedding/reranker/NPU installs, chat + vision answer, kill -9 during a download → resumed after restart, fresh machine without backends → llama.cpp installed automatically, SDK end-to-end test (11/11).
-- [ ] whisper.cpp backend (speech; FLM's whisper is listed but not served yet)
-- [ ] Profile editor in the GUI (context/pinning/device; API and CLI exist), aliases through the API
-- [ ] Fit badges recomputed when the context is changed in the install dialog (currently shown at the default context)
-- [ ] Playground (chat + tool-call inspector)
+- [x] Speech to text: **whisper.cpp** backend (`whisper-server` v1.9.5, Vulkan or CPU, source install, ~2 min; installed automatically like llama.cpp). `/v1/audio/transcriptions` and `/v1/audio/translations` (multipart, up to 200 MB; json/text/srt/vtt/verbose_json). Catalog family with 8 Whisper models, quants listed live from `ggerganov/whisper.cpp`. `contio transcribe`. Verified: WAV/MP3, German, translation (small), subtitles, OpenAI SDK.
+- [x] NPU Whisper via FastFlowLM: FLM only serves Whisper co-loaded next to an LLM (`flm serve <llm> --asr 1`; `whisper-v3:turbo` alone is rejected as "non-llm"), so it's `asr = true` under `[backends.flm]` plus an alias with `upstream_model = "whisper-v3:turbo"`. Verified: 3 s per clip after load; FLM doesn't translate.
+- [x] Model editor on the dashboard (context, device, pinning, idle TTL, extra args; config models read-only) and aliases through the API (`/api/aliases`, `contio alias`, editor), saved in `aliases.json` and dropped with their model.
+- [x] Fit badges for any context: `?context=` on the catalog detail endpoints, `contio show -c`, live in the install dialog (re-suggests the quant unless one was picked).
+- [x] Playground: streaming chat with reasoning, tool definitions and a tool-call inspector (send results back), image input, speed stats and the raw request; speech mode with file upload or microphone (recorded to 16 kHz WAV in the browser).
+- [x] Daemon stops its backends on SIGTERM/SIGHUP (was Ctrl-C only); per-backend pid files let the next start stop backends orphaned by a crash or `kill -9`.
 
 **Known gaps / M3 candidates**
+- whisper.cpp has no prebuilt Linux binaries upstream; Podman images exist but only tagged by commit (`main-vulkan-<sha>`), so only the source install is offered. large-v3-turbo doesn't translate (model limitation).
 - NPU models have no memory estimate yet (FLM's `footprint` is shown in the catalog but not used for pool budgeting).
 - Shallow source builds of llama.cpp report version `b1`, so the llama-server web UI asset isn't fetched (the API is unaffected).
 - llama.cpp Vulkan on gfx1150 runs flash attention over K/V on the CPU ("missing support" warning). Benchmarked: `--flash-attn on` is still +9% prefill at 4k tokens, so it stays the default.

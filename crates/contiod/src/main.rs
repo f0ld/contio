@@ -20,6 +20,7 @@ use anyhow::Context;
 use clap::Parser;
 use contio_backends::{
     Backend, FlmBackend, FlmConfig, LlamaCppBackend, LlamaCppConfig, LlamaRuntime, ManagerConfig, ModelManager,
+    WhisperBackend, WhisperConfig,
 };
 use contio_core::hw::HardwareInfo;
 use contio_install::BackendKind;
@@ -153,6 +154,9 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
     if let Some(f) = &config.backends.flm {
         backends.push(Arc::new(FlmBackend::new(flm_config(f))));
     }
+    if let Some(w) = &config.backends.whisper {
+        backends.push(Arc::new(WhisperBackend::new(WhisperConfig { bin_dir: w.bin_dir.clone(), cpu_threads: w.cpu_threads })));
+    }
 
     let keep = 100 - u64::from(config.manager.reserve_percent);
     let pool_budgets: HashMap<_, _> = hw.pools.iter().map(|p| (p.kind, p.total_bytes / 100 * keep)).collect();
@@ -170,7 +174,13 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
 }
 
 fn flm_config(f: &config::FlmSection) -> FlmConfig {
-    FlmConfig { prefix: f.prefix.clone(), model_path: f.model_path.clone(), xrt_dir: f.xrt_dir.clone(), embed: f.embed }
+    FlmConfig {
+        prefix: f.prefix.clone(),
+        model_path: f.model_path.clone(),
+        xrt_dir: f.xrt_dir.clone(),
+        embed: f.embed,
+        asr: f.asr,
+    }
 }
 
 /// Backends installed by contio (`contio backends install …`) are used for any kind
@@ -179,6 +189,7 @@ fn register_installed_backends(config: &Config, manager: &ModelManager, installe
     let configured = |k: BackendKind| match k {
         BackendKind::LlamaCpp => config.backends.llamacpp.is_some(),
         BackendKind::Flm => config.backends.flm.is_some(),
+        BackendKind::Whisper => config.backends.whisper.is_some(),
     };
     let mut done = Vec::new();
     for installed in contio_install::discover(&installer.data_dir) {

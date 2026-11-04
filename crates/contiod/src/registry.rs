@@ -16,12 +16,13 @@ pub struct Settings {
     /// How missing backends are installed when a model needs one.
     pub llamacpp_method: Method,
     pub flm_method: Method,
+    pub whisper_method: Method,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         // prebuilt: no build dependencies, ~30 MB, verified in M1
-        Self { llamacpp_method: Method::Prebuilt, flm_method: Method::Source }
+        Self { llamacpp_method: Method::Prebuilt, flm_method: Method::Source, whisper_method: Method::Source }
     }
 }
 

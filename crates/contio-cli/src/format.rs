@@ -191,15 +191,15 @@ pub fn aliases(v: &Value) -> String {
 pub fn detail(d: &Value) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "\x1b[1m{}\x1b[0m  {}", d["name"].as_str().unwrap_or_default(), d["repo"].as_str().unwrap_or_default());
-    let mut facts = vec![
-        params(d),
-        d["kind"].as_str().unwrap_or_default().to_owned(),
-        format!(
+    let speech = d["kind"] == "transcription";
+    let mut facts = vec![params(d), d["kind"].as_str().unwrap_or_default().to_owned()];
+    if !speech {
+        facts.push(format!(
             "context {} (default {})",
             d["context_length"].as_u64().map_or("?".into(), |c| format!("{}k", c / 1024)),
             d["default_context"].as_u64().map_or("?".into(), |c| format!("{}k", c / 1024)),
-        ),
-    ];
+        ));
+    }
     let caps = strings(&d["capabilities"]).join(", ");
     if !caps.is_empty() {
         facts.push(caps);
@@ -246,7 +246,7 @@ pub fn detail(d: &Value) -> String {
         })
         .collect();
     if !rows.is_empty() {
-        let at = d["fit_context"].as_u64().map_or(String::new(), |c| format!(" @{}k", c / 1024));
+        let at = d["fit_context"].as_u64().filter(|_| !speech).map_or(String::new(), |c| format!(" @{}k", c / 1024));
         let (gpu, cpu) = (format!("GPU (needs{at})"), format!("CPU (needs{at})"));
         let _ = writeln!(s, "\n{}", table(&["QUANT", "SIZE", "BPW", "QUALITY", &gpu, &cpu, ""], &rows));
         if let Some(m) = d["mmproj"]["path"].as_str() {
@@ -263,7 +263,7 @@ pub fn detail(d: &Value) -> String {
                 notes.push("single-turn, 1k ctx".to_owned());
             }
             if n["unsupported"] == true {
-                notes.push("not served by contio yet".to_owned());
+                notes.push("runs next to an NPU LLM: set asr = true for FastFlowLM".to_owned());
             }
             if !strings(&n["installed"]).is_empty() {
                 notes.push(format!("installed: {}", strings(&n["installed"]).join(", ")));
@@ -273,7 +273,7 @@ pub fn detail(d: &Value) -> String {
             [
                 format!("flm:{}", n["tag"].as_str().unwrap_or_default()),
                 n["footprint_bytes"].as_u64().map_or("-".into(), gib),
-                n["default_context"].as_u64().map_or("-".into(), |c| format!("{}k", c / 1024)),
+                n["default_context"].as_u64().filter(|c| *c >= 1024).map_or("-".into(), |c| format!("{}k", c / 1024)),
                 notes.join(", "),
             ]
         })
@@ -287,7 +287,7 @@ pub fn detail(d: &Value) -> String {
     } else {
         let _ = write!(
             s,
-            "\x1b[2m* recommended · fit at the default context · install: contio install {target} [--quant Q] [--device gpu|cpu{}]\x1b[0m",
+            "\x1b[2m* recommended · fit at the default context (change with -c) · install: contio install {target} [--quant Q] [--device gpu|cpu{}]\x1b[0m",
             if npu.is_empty() { "" } else { "|npu" }
         );
     }

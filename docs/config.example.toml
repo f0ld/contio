@@ -18,6 +18,7 @@ reserve_percent = 10               # share of each memory pool kept free
 # explicitly:
 #   contio backends install llama.cpp --method source|prebuilt|podman
 #   contio backends install flm --method source
+#   contio backends install whisper.cpp --method source
 # or point at existing installs here (takes precedence over installed ones).
 
 # llama.cpp: GGUF on GPU (Vulkan) or CPU. A Vulkan build serves both.
@@ -32,6 +33,13 @@ prefix = "~/.local/share/contio-spike/flm"
 model_path = "~/.local/share/contio-spike/models"
 # xrt_dir = "/opt/xilinx/xrt"
 embed = true                       # co-load embed-gemma next to each NPU LLM
+# asr = true                       # co-load Whisper (~1 GB more per NPU LLM); see the
+#                                  # whisper-npu alias below
+
+# whisper.cpp: speech to text on GPU (Vulkan) or CPU.
+# [backends.whisper]
+# bin_dir = "~/src/whisper.cpp/build/bin"
+# cpu_threads = 12
 
 # Agentic default: MoE on the GPU (docs/spikes/m0-gpu.md).
 [[models]]
@@ -57,8 +65,18 @@ tag = "qwen3-it:4b"
 device = "npu"
 context = 8192
 
+# Speech to text (POST /v1/audio/transcriptions); `contio install whisper-large-v3-turbo` does this for you.
+# [[models]]
+# id = "whisper"
+# format = "whisper"
+# path = "~/models/ggml-large-v3-turbo-q8_0.bin"
+# device = "gpu"
+# kind = "transcription"
+
 # Aliases: other names for models (spec §7.2). `upstream_model` overrides the
 # name sent to the backend, e.g. to reach FLM's co-loaded embedding model.
+# Aliases can also be added without a restart: `contio alias set <name> <model>`
+# or the model editor on the GUI dashboard (saved in aliases.json).
 [[aliases]]
 name = "coder"
 model = "qwen3.6-35b-a3b"
@@ -67,3 +85,9 @@ model = "qwen3.6-35b-a3b"
 name = "embed-gemma"
 model = "qwen3-4b-npu"
 upstream_model = "embed-gemma:300m"
+
+# NPU Whisper (needs asr = true above): transcriptions go to FLM's Whisper.
+# [[aliases]]
+# name = "whisper-npu"
+# model = "qwen3-4b-npu"
+# upstream_model = "whisper-v3:turbo"

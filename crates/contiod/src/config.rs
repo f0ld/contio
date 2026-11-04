@@ -58,6 +58,16 @@ impl Default for ManagerSection {
 pub struct BackendsSection {
     pub llamacpp: Option<LlamaCppSection>,
     pub flm: Option<FlmSection>,
+    pub whisper: Option<WhisperSection>,
+}
+
+/// whisper.cpp built elsewhere (`contio backends install whisper.cpp` needs no config).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhisperSection {
+    /// Directory containing `whisper-server`.
+    pub bin_dir: PathBuf,
+    pub cpu_threads: Option<u32>,
 }
 
 /// Set exactly one of `bin_dir` (native) or `image` (Podman).
@@ -78,6 +88,10 @@ pub struct FlmSection {
     pub xrt_dir: PathBuf,
     #[serde(default)]
     pub embed: bool,
+    /// Co-load Whisper next to every NPU LLM (`--asr 1`, ~1 GB more each);
+    /// reach it with an alias whose `upstream_model` is `whisper-v3:turbo`.
+    #[serde(default)]
+    pub asr: bool,
 }
 
 fn default_xrt_dir() -> PathBuf {
@@ -115,10 +129,16 @@ impl Config {
             expand(&mut f.model_path);
             expand(&mut f.xrt_dir);
         }
+        if let Some(w) = &mut c.backends.whisper {
+            expand(&mut w.bin_dir);
+        }
         let mut seen = HashSet::new();
         for m in &mut c.models {
             if !seen.insert(m.id.clone()) {
                 bail!("duplicate model id `{}`", m.id);
+            }
+            if let ModelSource::Whisper { path } = &mut m.source {
+                expand(path);
             }
             if let ModelSource::Gguf { path, mmproj } = &mut m.source {
                 expand(path);
@@ -253,6 +273,19 @@ upstream_model = "embed-gemma:300m"
     fn shipped_example_parses() {
         let c = Config::parse(include_str!("../../../docs/config.example.toml")).unwrap();
         assert_eq!(c.models.len(), 3);
+    }
+
+    #[test]
+    fn whisper_backend_and_models() {
+        let c = Config::parse(
+            "[backends.whisper]\nbin_dir = '~/w/bin'\n[backends.flm]\nprefix='/f'\nmodel_path='/m'\nasr=true\n\
+             [[models]]\nid='w'\nformat='whisper'\npath='~/ggml-base.bin'\ndevice='cpu'\nkind='transcription'\n",
+        )
+        .unwrap();
+        assert!(c.backends.whisper.unwrap().bin_dir.is_absolute(), "tilde expanded");
+        assert!(c.backends.flm.unwrap().asr);
+        assert_eq!(c.models[0].kind, contio_core::model::ModelKind::Transcription);
+        assert!(matches!(&c.models[0].source, ModelSource::Whisper { path } if path.is_absolute()));
     }
 
     #[test]

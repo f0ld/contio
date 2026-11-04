@@ -9,6 +9,7 @@ mod flm;
 pub mod jobs;
 mod llamacpp;
 pub mod preflight;
+mod whisper;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -20,6 +21,7 @@ use tokio::process::Command;
 
 pub use flm::{FLM_DEFAULT_VERSION, flm_preflight, install_flm};
 pub use llamacpp::{LLAMACPP_DEFAULT_VERSION, install_llamacpp, llamacpp_preflight};
+pub use whisper::{WHISPER_DEFAULT_VERSION, install_whisper, whisper_preflight};
 
 use crate::jobs::JobCtx;
 
@@ -31,6 +33,8 @@ pub enum BackendKind {
     LlamaCpp,
     #[serde(rename = "flm")]
     Flm,
+    #[serde(rename = "whisper.cpp")]
+    Whisper,
 }
 
 impl BackendKind {
@@ -38,6 +42,7 @@ impl BackendKind {
         match self {
             Self::LlamaCpp => "llama.cpp",
             Self::Flm => "flm",
+            Self::Whisper => "whisper.cpp",
         }
     }
 }
@@ -58,7 +63,7 @@ pub struct InstalledBackend {
     pub method: Method,
     pub version: String,
     pub dir: PathBuf,
-    /// Native llama.cpp: directory with `llama-server`.
+    /// Native llama.cpp / whisper.cpp: directory with the server binary.
     #[serde(default)]
     pub bin_dir: Option<PathBuf>,
     /// Podman llama.cpp: image reference.
@@ -86,7 +91,7 @@ pub fn install_dir(data_dir: &Path, backend: BackendKind, version: &str, method:
 /// All installed backends, newest first.
 pub fn discover(data_dir: &Path) -> Vec<InstalledBackend> {
     let mut found = Vec::new();
-    for kind in [BackendKind::LlamaCpp, BackendKind::Flm] {
+    for kind in [BackendKind::LlamaCpp, BackendKind::Flm, BackendKind::Whisper] {
         let Ok(entries) = std::fs::read_dir(data_dir.join("backends").join(kind.dir_name())) else { continue };
         for e in entries.flatten() {
             let Ok(text) = std::fs::read_to_string(e.path().join(MARKER)) else { continue };

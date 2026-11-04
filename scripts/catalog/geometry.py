@@ -177,6 +177,8 @@ def main(ids):
     for model in cat["models"]:
         if ids and model["id"] not in ids:
             continue
+        if "ggml" in model:  # whisper.cpp: no GGUF header, no KV cache
+            continue
         repo = model["repo"]
         try:
             info = json.loads(get(f"{HF}/api/models/{repo}?expand[]=gguf"))

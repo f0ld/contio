@@ -45,7 +45,7 @@ enum Command {
         /// Only models whose suggested quant fits.
         #[arg(long)]
         fits: bool,
-        #[arg(long, value_parser = ["chat", "embedding", "reranker"])]
+        #[arg(long, value_parser = ["chat", "embedding", "reranker", "transcription"])]
         kind: Option<String>,
         /// Search all GGUF repos on Hugging Face instead.
         #[arg(long)]
@@ -125,6 +125,20 @@ enum Command {
         #[arg(long)]
         show_reasoning: bool,
     },
+    /// Speech to text with a Whisper model (wav, mp3, flac or ogg).
+    Transcribe {
+        model: String,
+        file: std::path::PathBuf,
+        /// Spoken language, e.g. `de` [default: detected]
+        #[arg(long, short)]
+        language: Option<String>,
+        /// Translate to English instead (whisper.cpp models).
+        #[arg(long)]
+        translate: bool,
+        /// json, text, srt, vtt or verbose_json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// Other names for models: list, set, remove.
     Alias {
         #[command(subcommand)]
@@ -163,9 +177,9 @@ enum AliasAction {
 enum BackendsAction {
     /// Registered and installed backends (default).
     List,
-    /// Install llama.cpp (source | prebuilt | podman) or FastFlowLM (source).
+    /// Install llama.cpp (source | prebuilt | podman), FastFlowLM or whisper.cpp (source).
     Install {
-        #[arg(value_parser = ["llama.cpp", "flm"])]
+        #[arg(value_parser = ["llama.cpp", "flm", "whisper.cpp"])]
         backend: String,
         #[arg(long, value_parser = ["source", "prebuilt", "podman"])]
         method: String,
@@ -294,6 +308,9 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 match result["kind"].as_str() {
                     Some("embedding") => eprintln!("installed as `{id}`: POST /v1/embeddings with \"model\": \"{id}\""),
                     Some("reranker") => eprintln!("installed as `{id}`: POST /v1/rerank with \"model\": \"{id}\""),
+                    Some("transcription") => eprintln!(
+                        "installed as `{id}`: POST /v1/audio/transcriptions (multipart: file, model={id})"
+                    ),
                     _ => eprintln!("installed as `{id}`; try it: contio chat {id} \"hello\"  (API model name: {id})"),
                 }
             }
@@ -316,6 +333,38 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             client.patch(&format!("/api/models/{}", urlencode(&model)), &body).await?;
             eprintln!("updated {model} (restarts on next use if it was loaded)");
+        }
+        Command::Transcribe { model, file, language, translate, format } => {
+            let data = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let name = file.file_name().map_or("audio".into(), |n| n.to_string_lossy().into_owned());
+            let mut form = reqwest::multipart::Form::new()
+                .text("model", model)
+                .text("response_format", format.clone())
+                .part("file", reqwest::multipart::Part::bytes(data).file_name(name));
+            if let Some(l) = language {
+                form = form.text("language", l);
+            }
+            let path = if translate { "translations" } else { "transcriptions" };
+            let started = std::time::Instant::now();
+            let res = client
+                .http
+                .post(format!("{}/v1/audio/{path}", client.base))
+                .multipart(form)
+                .send()
+                .await
+                .with_context(|| client.unreachable())?;
+            let status = res.status();
+            let text = res.text().await?;
+            if !status.is_success() {
+                let msg = serde_json::from_str::<Value>(&text).ok().and_then(|v| v["error"]["message"].as_str().map(str::to_owned));
+                bail!("{} (HTTP {})", msg.unwrap_or(text), status.as_u16());
+            }
+            match serde_json::from_str::<Value>(&text) {
+                Ok(v) if format == "json" && !cli.json => println!("{}", v["text"].as_str().unwrap_or_default().trim()),
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v)?),
+                Err(_) => println!("{}", text.trim()),
+            }
+            eprintln!("\x1b[2m{:.1}s\x1b[0m", started.elapsed().as_secs_f64());
         }
         Command::Alias { action } => match action.unwrap_or(AliasAction::List) {
             AliasAction::List => {

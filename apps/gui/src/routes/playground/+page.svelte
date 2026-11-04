@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from "$app/state";
+  import { startRecording, transcribe, type ResponseFormat, type Transcript } from "$lib/audio";
   import { streamChat, type ToolCall, type Usage } from "$lib/chat";
   import { errorText, fetchAliases, fetchModels } from "$lib/daemon";
   import { live } from "$lib/live.svelte";
@@ -65,6 +66,13 @@
   let error = $state<string | null>(null);
   let scroller: HTMLElement | undefined = $state();
 
+  // speech to text
+  let language = $state("");
+  let translate = $state(false);
+  let format = $state<ResponseFormat>("text");
+  let recording = $state<{ stop: () => Promise<Blob> } | null>(null);
+  let transcripts = $state<(Transcript & { source: string; format: ResponseFormat; error?: string })[]>([]);
+
   $effect(() => {
     localStorage.setItem("playground.model", model);
     localStorage.setItem("playground.system", system);
@@ -75,9 +83,10 @@
   async function loadModels() {
     try {
       const [m, a] = await Promise.all([fetchModels(), fetchAliases()]);
-      models = m.filter((x) => x.kind === "chat");
-      // upstream_model aliases address another model in the process (FLM's embedder)
-      aliases = a.filter((x) => !x.upstream_model && models.some((m) => m.id === x.model));
+      models = m.filter((x) => x.kind === "chat" || x.kind === "transcription");
+      // upstream_model aliases address another model in the same process: FLM's
+      // Whisper (asr = true) is offered, its embedding model isn't
+      aliases = a.filter((x) => (!x.upstream_model || isWhisper(x)) && models.some((m) => m.id === x.model));
       if (!model || !names().includes(model)) model = (models.find((x) => x.state === "ready") ?? models[0])?.id ?? "";
     } catch (e) {
       error = errorText(e);
@@ -89,7 +98,49 @@
     if (live.online) loadModels();
   });
 
-  let target = $derived(models.find((m) => m.id === (aliases.find((a) => a.name === model)?.model ?? model)));
+  const isWhisper = (a: Alias) => !!a.upstream_model?.startsWith("whisper");
+  let alias = $derived(aliases.find((a) => a.name === model));
+  let target = $derived(models.find((m) => m.id === (alias?.model ?? model)));
+  let speech = $derived(target?.kind === "transcription" || (!!alias && isWhisper(alias)));
+
+  async function runTranscription(audio: Blob, source: string) {
+    busy = true;
+    error = null;
+    try {
+      const t = await transcribe(model, audio, source, { language: language.trim() || undefined, translate, format });
+      transcripts.unshift({ ...t, source, format });
+    } catch (e) {
+      transcripts.unshift({ text: "", seconds: 0, source, format, error: errorText(e) });
+    } finally {
+      busy = false;
+      loadModels();
+    }
+  }
+
+  async function pickAudio(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file) await runTranscription(file, file.name);
+  }
+
+  async function toggleRecording() {
+    if (recording) {
+      const r = recording;
+      recording = null;
+      try {
+        await runTranscription(await r.stop(), `recording ${new Date().toLocaleTimeString()}.wav`);
+      } catch (e) {
+        error = `Recording: ${errorText(e)}`;
+      }
+      return;
+    }
+    try {
+      recording = await startRecording();
+    } catch (e) {
+      error = `Microphone: ${errorText(e)}`;
+    }
+  }
 
   let tools = $derived.by((): { ok: true; value: unknown[] } | { ok: false; error: string } => {
     if (!toolsOn) return { ok: true, value: [] };
@@ -242,14 +293,29 @@
         {/each}
       </select>
     </label>
-    {#if target && target.state !== "ready"}<span class="sub">loads on the first message</span>{/if}
+    {#if target && target.state !== "ready"}<span class="sub">loads on first use</span>{/if}
     <span class="spacer"></span>
-    <label>Temperature <input type="number" min="0" max="2" step="0.1" placeholder="default" bind:value={temperature} /></label>
-    <label>Max tokens <input type="number" min="1" step="256" bind:value={maxTokens} /></label>
+    {#if speech}
+      <label>Language <input class="lang" placeholder="detect" bind:value={language} /></label>
+      <label class="check"><input type="checkbox" bind:checked={translate} /> translate to English</label>
+      <label>
+        Output
+        <select bind:value={format}>
+          <option value="text">text</option>
+          <option value="srt">subtitles (srt)</option>
+          <option value="vtt">subtitles (vtt)</option>
+          <option value="verbose_json">segments (json)</option>
+        </select>
+      </label>
+    {:else}
+      <label>Temperature <input type="number" min="0" max="2" step="0.1" placeholder="default" bind:value={temperature} /></label>
+      <label>Max tokens <input type="number" min="1" step="256" bind:value={maxTokens} /></label>
+    {/if}
   </div>
   {#if models.length === 0 && live.online}
-    <p class="sub">No chat models installed. Pick one in the <a href="/catalog">catalog</a>.</p>
+    <p class="sub">No chat or speech models installed. Pick one in the <a href="/catalog">catalog</a>.</p>
   {/if}
+  {#if !speech}
   <details>
     <summary>System prompt{system.trim() ? " (set)" : ""}</summary>
     <textarea rows="3" bind:value={system} placeholder="You are a helpful assistant."></textarea>
@@ -266,7 +332,38 @@
     <span class="spacer"></span>
     <button class="small" disabled={!messages.length} onclick={clear}>New chat</button>
   </div>
+  {/if}
 </section>
+
+{#if speech}
+  <section class="card composer">
+    <div class="row">
+      <label class="attach">
+        Choose audio file
+        <input type="file" accept="audio/*,.wav,.mp3,.flac,.ogg" onchange={pickAudio} hidden disabled={busy} />
+      </label>
+      <button class:danger={!!recording} disabled={busy && !recording} onclick={toggleRecording}>
+        {recording ? "■ Stop and transcribe" : "● Record"}
+      </button>
+      <span class="sub">
+        {busy ? (target?.state === "ready" ? "transcribing…" : "loading the model…") : "WAV, MP3, FLAC or OGG; recordings are sent as WAV"}
+      </span>
+    </div>
+  </section>
+  {#if error}<p class="error-text">{error}</p>{/if}
+  {#each transcripts as t, i (transcripts.length - i)}
+    <section class="card transcript">
+      <div class="row sub">
+        <b>{t.source}</b>
+        {#if t.language}<span>{t.language}</span>{/if}
+        {#if !t.error}<span>{t.seconds.toFixed(1)} s</span>{/if}
+        <span class="spacer"></span>
+        {#if t.text}<button class="small" onclick={() => navigator.clipboard.writeText(t.text)}>Copy</button>{/if}
+      </div>
+      {#if t.error}<p class="error-text">{t.error}</p>{:else}<div class="text" class:mono={t.format !== "text"}>{t.text}</div>{/if}
+    </section>
+  {/each}
+{:else}
 
 <section class="card chat" bind:this={scroller}>
   {#if messages.length === 0}
@@ -345,7 +442,9 @@
   </div>
 </section>
 
-{#if showRaw && lastRequest}
+{/if}
+
+{#if showRaw && lastRequest && !speech}
   <section class="card">
     <h2>Last request</h2>
     <pre class="cmd raw">POST /v1/chat/completions (stream)
@@ -492,6 +591,13 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 0.2rem 0.6rem;
+  }
+  .lang {
+    width: 5rem;
+  }
+  .transcript {
+    display: grid;
+    gap: 0.4rem;
   }
   .raw {
     max-height: 24rem;

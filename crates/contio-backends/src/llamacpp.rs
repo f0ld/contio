@@ -37,14 +37,14 @@ impl LlamaCppBackend {
     fn gguf_path(profile: &ModelProfile) -> Option<&PathBuf> {
         match &profile.source {
             ModelSource::Gguf { path, .. } => Some(path),
-            ModelSource::Flm { .. } => None,
+            ModelSource::Flm { .. } | ModelSource::Whisper { .. } => None,
         }
     }
 
     fn mmproj_path(profile: &ModelProfile) -> Option<&PathBuf> {
         match &profile.source {
             ModelSource::Gguf { mmproj, .. } => mmproj.as_ref(),
-            ModelSource::Flm { .. } => None,
+            ModelSource::Flm { .. } | ModelSource::Whisper { .. } => None,
         }
     }
 

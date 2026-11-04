@@ -115,7 +115,7 @@
       <h2>API</h2>
       <dl>
         <dt>OpenAI</dt>
-        <dd><code>{DAEMON_URL}/v1</code> <span class="sub">chat, completions, responses, embeddings, rerank</span></dd>
+        <dd><code>{DAEMON_URL}/v1</code> <span class="sub">chat, completions, responses, embeddings, rerank, audio transcriptions</span></dd>
         <dt>Anthropic</dt>
         <dd><code>{DAEMON_URL}</code> <span class="sub">messages</span></dd>
       </dl>

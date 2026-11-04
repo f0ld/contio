@@ -35,6 +35,13 @@
       registeredAs: "FastFlowLM",
       methods: [{ id: "source", name: "Build from source", note: "the only option; needs the XRT runtime and build tools" }],
     },
+    {
+      id: "whisper.cpp",
+      name: "whisper.cpp",
+      what: "Speech to text with Whisper models on the GPU (Vulkan) or CPU.",
+      registeredAs: "whisper.cpp",
+      methods: [{ id: "source", name: "Build from source", note: "the only option on Linux; same build tools as llama.cpp, ~2 min" }],
+    },
   ];
 
   async function load() {
@@ -57,12 +64,13 @@
     }
   });
 
-  const method = (b: BackendId): InstallMethod =>
-    (b === "llama.cpp" ? info?.settings.llamacpp_method : info?.settings.flm_method) ?? "source";
+  const SETTING = { "llama.cpp": "llamacpp_method", flm: "flm_method", "whisper.cpp": "whisper_method" } as const;
+
+  const method = (b: BackendId): InstallMethod => info?.settings[SETTING[b]] ?? "source";
 
   async function setMethod(b: BackendId, m: InstallMethod) {
     if (!info) return;
-    const next = { ...info.settings, [b === "llama.cpp" ? "llamacpp_method" : "flm_method"]: m };
+    const next = { ...info.settings, [SETTING[b]]: m };
     try {
       info.settings = await saveSettings(next);
       delete checks[b];

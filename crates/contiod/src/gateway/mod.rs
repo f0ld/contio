@@ -6,6 +6,7 @@
 //! `responses.rs`); other endpoints are passed through unchanged.
 
 pub mod anthropic;
+pub mod audio;
 mod guards;
 mod normalize;
 pub mod responses;
@@ -35,10 +36,7 @@ pub async fn send(state: &AppState, mut request: Value, path: &str) -> Result<Up
     let Some(name) = request.get("model").and_then(Value::as_str) else {
         return Err(openai_error(StatusCode::BAD_REQUEST, "invalid_request_error", "missing `model`", Some("model")));
     };
-    let (id, upstream_override) = match state.aliases.get(name) {
-        Some(a) => (a.model.clone(), a.upstream_model.clone()),
-        None => (name.to_owned(), None),
-    };
+    let (id, upstream_override) = resolve(state, name);
     let lease = state.manager.acquire(&id).await.map_err(|e| backend_error(&e))?;
     request["model"] = Value::String(upstream_override.unwrap_or_else(|| lease.upstream_model.clone()));
     let url = format!("{}{path}", lease.base_url);
@@ -50,6 +48,14 @@ pub async fn send(state: &AppState, mut request: Value, path: &str) -> Result<Up
             &format!("backend request failed: {e}"),
             None,
         )),
+    }
+}
+
+/// A model name or alias → (model id, `model` to send upstream instead of the backend's own).
+pub fn resolve(state: &AppState, name: &str) -> (String, Option<String>) {
+    match state.aliases.get(name) {
+        Some(a) => (a.model, a.upstream_model),
+        None => (name.to_owned(), None),
     }
 }
 

@@ -100,6 +100,7 @@
       <option value="chat">chat</option>
       <option value="embedding">embedding</option>
       <option value="reranker">reranker</option>
+      <option value="transcription">speech to text</option>
     </select>
     <span class="label">Needs</span>
     {#each CAPS as c (c)}

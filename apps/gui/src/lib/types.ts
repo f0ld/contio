@@ -60,7 +60,7 @@ export interface Metrics {
 }
 
 // Mirrors crates/contio-core/src/model.rs (ModelStatus, state flattened).
-export type ModelKind = "chat" | "embedding" | "reranker";
+export type ModelKind = "chat" | "embedding" | "reranker" | "transcription";
 
 export interface ModelOrigin {
   catalog?: string;
@@ -74,7 +74,10 @@ export type ModelState =
   | { state: "ready"; port: number }
   | { state: "failed"; error: string };
 
-export type ModelSource = { format: "gguf"; path: string; mmproj?: string } | { format: "flm"; tag: string };
+export type ModelSource =
+  | { format: "gguf"; path: string; mmproj?: string }
+  | { format: "flm"; tag: string }
+  | { format: "whisper"; path: string };
 
 export type ModelStatus = {
   id: string;
@@ -252,7 +255,7 @@ export interface Job {
 
 // Backends and settings (install_api.rs, registry.rs).
 export type InstallMethod = "source" | "prebuilt" | "podman";
-export type BackendId = "llama.cpp" | "flm";
+export type BackendId = "llama.cpp" | "flm" | "whisper.cpp";
 
 export interface InstalledBackend {
   backend: BackendId;
@@ -268,6 +271,7 @@ export interface InstalledBackend {
 export interface Settings {
   llamacpp_method: InstallMethod;
   flm_method: InstallMethod;
+  whisper_method: InstallMethod;
 }
 
 export interface BackendsInfo {

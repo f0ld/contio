@@ -9,12 +9,13 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use contio_backends::{
-    Backend, FlmBackend, FlmConfig, LlamaCppBackend, LlamaCppConfig, LlamaRuntime, ModelManager,
+    Backend, FlmBackend, FlmConfig, LlamaCppBackend, LlamaCppConfig, LlamaRuntime, ModelManager, WhisperBackend,
+    WhisperConfig,
 };
 use contio_install::jobs::{JobCtx, JobInfo, Jobs};
 use contio_install::{
-    BackendKind, FLM_DEFAULT_VERSION, InstalledBackend, LLAMACPP_DEFAULT_VERSION, Method, discover, flm_preflight,
-    install_flm, install_llamacpp, llamacpp_preflight,
+    BackendKind, FLM_DEFAULT_VERSION, InstalledBackend, LLAMACPP_DEFAULT_VERSION, Method, WHISPER_DEFAULT_VERSION,
+    discover, flm_preflight, install_flm, install_llamacpp, install_whisper, llamacpp_preflight, whisper_preflight,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -76,7 +77,7 @@ impl Installer {
 
     /// FLM settings for a contio-installed FLM.
     fn flm_config(&self, prefix: PathBuf) -> FlmConfig {
-        FlmConfig { prefix, model_path: self.models_dir().join("flm"), xrt_dir: XRT_DIR.into(), embed: true }
+        FlmConfig { prefix, model_path: self.models_dir().join("flm"), xrt_dir: XRT_DIR.into(), embed: true, asr: false }
     }
 }
 
@@ -96,6 +97,10 @@ pub fn backend_from_installed(b: &InstalledBackend, installer: &Installer) -> Op
             installer.set_flm(config.clone());
             Some(Arc::new(FlmBackend::new(config)))
         }
+        BackendKind::Whisper => Some(Arc::new(WhisperBackend::new(WhisperConfig {
+            bin_dir: b.bin_dir.clone()?,
+            cpu_threads: Some(installer.cpu_threads),
+        }))),
     }
 }
 
@@ -111,6 +116,7 @@ pub async fn install_and_register(
     let installed = match backend {
         BackendKind::LlamaCpp => install_llamacpp(&inst.http, &inst.data_dir, method, version, ctx).await?,
         BackendKind::Flm => install_flm(&inst.data_dir, method, version, ctx).await?,
+        BackendKind::Whisper => install_whisper(&inst.data_dir, method, version, ctx).await?,
     };
     if let Some(b) = backend_from_installed(&installed, inst) {
         manager.add_backend(b);
@@ -198,7 +204,9 @@ pub async fn list_backends(State(state): State<AppState>) -> Response {
     Json(json!({
         "registered": state.manager.backend_names(),
         "installed": installed,
-        "defaults": { "llama.cpp": LLAMACPP_DEFAULT_VERSION, "flm": FLM_DEFAULT_VERSION },
+        "defaults": {
+            "llama.cpp": LLAMACPP_DEFAULT_VERSION, "flm": FLM_DEFAULT_VERSION, "whisper.cpp": WHISPER_DEFAULT_VERSION,
+        },
         "settings": state.registry.settings(),
     }))
     .into_response()
@@ -208,6 +216,7 @@ pub async fn preflight(Query(q): Query<BackendQuery>) -> Response {
     let pf = tokio::task::spawn_blocking(move || match q.backend {
         BackendKind::LlamaCpp => llamacpp_preflight(q.method),
         BackendKind::Flm => flm_preflight(q.method),
+        BackendKind::Whisper => whisper_preflight(q.method),
     })
     .await
     .unwrap_or_default();
@@ -234,6 +243,7 @@ fn start_backend_install(state: &AppState, req: InstallRequest) -> Result<u64, S
     let version = req.version.clone().unwrap_or_else(|| match req.backend {
         BackendKind::LlamaCpp => LLAMACPP_DEFAULT_VERSION.into(),
         BackendKind::Flm => FLM_DEFAULT_VERSION.into(),
+        BackendKind::Whisper => WHISPER_DEFAULT_VERSION.into(),
     });
     if !version.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) || version.starts_with('.') {
         return Err("invalid version".into());
@@ -256,8 +266,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Response {
 }
 
 pub async fn put_settings(State(state): State<AppState>, Json(settings): Json<Settings>) -> Response {
-    if settings.flm_method != Method::Source {
-        return bad_request("FastFlowLM can only be installed from source");
+    if settings.flm_method != Method::Source || settings.whisper_method != Method::Source {
+        return bad_request("FastFlowLM and whisper.cpp can only be installed from source");
     }
     match state.registry.set_settings(settings.clone()) {
         Ok(()) => Json(settings).into_response(),

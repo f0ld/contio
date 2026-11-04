@@ -66,6 +66,12 @@ pub struct CatalogModel {
     pub flm: Vec<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// whisper.cpp model stem in `repo`, e.g. `large-v3-turbo` for `ggml-large-v3-turbo*.bin`.
+    #[serde(default)]
+    pub ggml: Option<String>,
+    /// Total parameters in billions, for models without a GGUF header (Whisper).
+    #[serde(default)]
+    pub params_b: Option<f32>,
     #[serde(skip_deserializing)]
     pub geometry: Option<Geometry>,
 }
@@ -93,6 +99,18 @@ impl CatalogModel {
             }
         }
         caps
+    }
+
+    /// This model's quants among its repo's files.
+    pub fn listing(&self, files: &[quant::RepoFile]) -> quant::RepoListing {
+        match &self.ggml {
+            Some(stem) => quant::parse_ggml(files, stem),
+            None => quant::parse_tree(files),
+        }
+    }
+
+    pub fn params(&self) -> Option<u64> {
+        self.geometry.as_ref().and_then(|g| g.params).or(self.params_b.map(|b| (f64::from(b) * 1e9) as u64))
     }
 
     /// Context to install with: the curated default, capped at the maximum.
@@ -153,6 +171,11 @@ mod tests {
         let c = Catalog::builtin();
         assert!(c.models.len() >= 40, "{}", c.models.len());
         for m in &c.models {
+            if m.ggml.is_some() {
+                assert_eq!(m.kind, ModelKind::Transcription, "{}", m.id);
+                assert!(m.params_b.is_some() && m.recommended.is_some(), "{}", m.id);
+                continue;
+            }
             let g = m.geometry.as_ref().unwrap_or_else(|| panic!("{}: run scripts/catalog/geometry.py", m.id));
             assert!(g.kv.full_bytes_per_token + g.kv.swa_bytes_per_token > 0, "{}: no KV geometry", m.id);
             assert!(m.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-.".contains(c)), "{}", m.id);

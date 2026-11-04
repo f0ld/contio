@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -128,6 +128,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/completions", post(gateway::passthrough))
         .route("/v1/embeddings", post(gateway::passthrough))
         .route("/v1/rerank", post(gateway::passthrough))
+        .route(
+            "/v1/audio/transcriptions",
+            post(gateway::audio::transcriptions).layer(DefaultBodyLimit::max(gateway::audio::MAX_UPLOAD)),
+        )
+        .route(
+            "/v1/audio/translations",
+            post(gateway::audio::translations).layer(DefaultBodyLimit::max(gateway::audio::MAX_UPLOAD)),
+        )
         .route("/v1/messages", post(gateway::anthropic::messages))
         .route("/v1/messages/count_tokens", post(gateway::anthropic::count_tokens))
         .route("/v1/responses", post(gateway::responses::create))

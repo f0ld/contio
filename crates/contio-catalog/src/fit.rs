@@ -1,6 +1,6 @@
 //! Does a model fit in its memory pool? (spec §4.3)
 
-use contio_core::model::{KvGeometry, estimate_memory};
+use contio_core::model::{KvGeometry, estimate_memory, estimate_whisper_memory};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +37,11 @@ pub fn fit(needed_bytes: u64, budget_bytes: u64) -> Fit {
 /// A GGUF model (+ projector) at `context` against a pool budget.
 pub fn fit_gguf(weights: u64, kv: Option<&KvGeometry>, context: u32, budget_bytes: u64) -> Fit {
     fit(estimate_memory(weights, kv, Some(context)), budget_bytes)
+}
+
+/// A whisper.cpp model against a pool budget.
+pub fn fit_whisper(weights: u64, budget_bytes: u64) -> Fit {
+    fit(estimate_whisper_memory(weights), budget_bytes)
 }
 
 #[cfg(test)]

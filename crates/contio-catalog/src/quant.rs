@@ -132,6 +132,27 @@ pub fn parse_tree(files: &[RepoFile]) -> RepoListing {
     listing
 }
 
+/// whisper.cpp's GGML files for one model: `ggml-<stem>.bin` (F16) and
+/// `ggml-<stem>-<quant>.bin`. `ggml-base.en.bin` is a different model than
+/// `ggml-base.bin`, so the stem must match exactly.
+pub fn parse_ggml(files: &[RepoFile], stem: &str) -> RepoListing {
+    let prefix = format!("ggml-{stem}");
+    let mut quants: Vec<Quant> = files
+        .iter()
+        .filter_map(|f| {
+            let rest = file_name(&f.path).strip_prefix(&prefix)?.strip_suffix(".bin")?;
+            let label = match rest.strip_prefix('-') {
+                None if rest.is_empty() => "F16".to_owned(),
+                Some(q) if looks_like_quant(q) && !q.contains('-') => q.to_ascii_uppercase(),
+                _ => return None,
+            };
+            Some(Quant { label, size: f.size, files: vec![f.clone()] })
+        })
+        .collect();
+    quants.sort_by_key(|q| q.size);
+    RepoListing { quants, mmproj: vec![] }
+}
+
 /// Average bits per weight.
 pub fn bits_per_weight(size: u64, params: u64) -> Option<f32> {
     (params > 0).then(|| (size as f64 * 8.0 / params as f64) as f32)
@@ -172,6 +193,27 @@ mod tests {
         ] {
             assert_eq!(quant_label(path).as_deref(), want, "{path}");
         }
+    }
+
+    #[test]
+    fn ggml_whisper_files() {
+        let tree = [
+            f("ggml-large-v3-turbo.bin", 1625),
+            f("ggml-large-v3-turbo-q8_0.bin", 874),
+            f("ggml-large-v3-turbo-q5_0.bin", 574),
+            f("ggml-large-v3.bin", 3095),
+            f("ggml-large-v3-q5_0.bin", 1081),
+            f("ggml-base.bin", 148),
+            f("ggml-base.en.bin", 148),
+            f("ggml-base.en-q5_1.bin", 60),
+            f("ggml-base-q5_1.bin", 60),
+            f("ggml-large-v3-encoder.mlmodelc.zip", 1),
+        ];
+        let labels = |stem| parse_ggml(&tree, stem).quants.into_iter().map(|q| q.label).collect::<Vec<_>>();
+        assert_eq!(labels("large-v3-turbo"), ["Q5_0", "Q8_0", "F16"]);
+        assert_eq!(labels("large-v3"), ["Q5_0", "F16"]);
+        assert_eq!(labels("base"), ["Q5_1", "F16"]);
+        assert_eq!(labels("base.en"), ["Q5_1", "F16"]);
     }
 
     #[test]
