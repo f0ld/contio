@@ -379,11 +379,19 @@ contio serve                            # run daemon in foreground
 - [x] Presets quick (512 tokens, 1 run) / standard (512 + 4k, 3 runs, 4 parallel) / full (+16k, 5 runs). Run conditions recorded: power profile, AC/battery, backend + path, other loaded models.
 - [x] Runs as a background job (one at a time): unloads other idle models (optional), reloads the model for load time and memory, holds a lease so it isn't evicted.
 - [x] Results in SQLite (`bench.db`: runs + headline metrics), list/detail/delete API, CSV/JSON export. CLI `contio bench run|results|show|export|rm`.
-- [x] Tool-calling suite (`registry/bench/tool_calls.json`, 23 cases written for contio): simple, choose among 11 tools, parallel, multi-turn (results, chained lookups, error results), no-call when no tool fits, JSON schema output. Type-strict argument checks; pass rate per category; **agent-ready** = ≥ 90% overall and ≥ 75% in every category.
-- [x] GUI Benchmarks page: run form, bar charts per metric (latest run per model), all runs with detail (per prompt length / per case with first failure), CSV/JSON export.
-- [ ] Coding (podman sandbox), reasoning/math, knowledge subsets; embedding, reranker and Whisper (WER) quality
-- [ ] Speed-vs-quality scatter, quant-ladder and device comparison views; arena with Elo
-- [ ] Power-profile switching for a run (record-only so far); feeding measured speed back into the catalog's fit estimate
+- [x] Tool-calling suite (`registry/bench/tool_calls.json`, 23 cases written for contio): simple, choose among 11 tools, parallel, multi-turn (results, chained lookups, error results), no-call when no tool fits, JSON schema output. Type-strict argument checks; pass rate per category; **agent-ready** = ≥ 90% overall and ≥ 75% in every category. Requests use the model's own sampling: greedy decoding sent Qwen thinking models into 4096-token loops.
+- [x] Quality subsets (all MIT, fetched with a fixed seed by `scripts/bench/fetch_subsets.py`): reasoning = 50 GSM8K problems, knowledge = 56 MMLU-Pro questions (4 per subject), coding = 40 HumanEval tasks. Quick runs the first 20 items with a 4096-token budget; standard all items, full all items 3×, 8192 tokens. Truncated answers count as failures and are reported.
+- [x] Coding sandbox: generated code runs only in Podman (`python:3.12-alpine`): `--network=none`, read-only root, `--cap-drop=all`, no-new-privileges, 64 pids, 256 MB, 1 CPU, user nobody, 10 s timeout. Verified: network blocked, root read-only, infinite loop killed.
+- [x] Power profile per run over D-Bus (`net.hadess.PowerProfiles`, tuned-ppd on Fedora): performance/power-saver are *held* (released automatically if contiod dies), balanced is set and restored; restored after cancellation too.
+- [x] GUI Benchmarks page: run form (models, suites, preset, power profile), bar charts per metric (latest run per model), speed-vs-tool-calling scatter, pass rate per quality suite, all runs with detail (per prompt length / per case or item with first failure), CSV/JSON export.
+- [x] Measured results feed the catalog: installed quants show their latest speed, tool-calling pass rate and agent-ready badge (install dialog, `contio show`).
+- [x] Robustness: cancelling a benchmark drops its in-flight request (the backend stops generating); shutdown cancels benchmark jobs and gives open requests 10 s; orphan cleanup skips backends whose parent contiod is still alive.
+- [ ] Embedding, reranker and Whisper (WER) quality; custom prompt sets; arena with Elo; LLM-as-judge
+- [ ] Quant-ladder and device-comparison views; "thinking off" variant
+
+Findings so far:
+- llama.cpp rejects requests that combine `tools` with a `response_format` schema ("failed to parse grammar"); FastFlowLM accepts them. The gateway could drop the schema grammar or validate afterwards (M5).
+- Tool calling (quick): Qwen3.5 4B 100% (agent-ready), Qwen3 4B on the NPU 91% (fails chained lookups: invents the user id), Qwen3.6 35B-A3B 87% on the first suite version (before the JSON/no-tools fix; to rerun).
 
 First measurements (Framework 13, performance profile, AC, standard preset):
 
