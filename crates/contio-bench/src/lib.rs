@@ -5,6 +5,7 @@
 //! The daemon owns model lifecycle (load timing, memory baselines, unloading
 //! other models) and runs these as background jobs.
 
+pub mod custom;
 pub mod monitor;
 pub mod perf;
 pub mod power_profile;
@@ -54,6 +55,8 @@ pub enum SuiteKind {
     Retrieval,
     /// Word error rate of speech-to-text models (LibriSpeech subset).
     Speech,
+    /// The user's own prompt set (`custom::CustomSet`).
+    Custom,
 }
 
 impl SuiteKind {
@@ -66,6 +69,7 @@ impl SuiteKind {
             Self::Coding => "coding",
             Self::Retrieval => "retrieval",
             Self::Speech => "speech",
+            Self::Custom => "custom",
         }
     }
 
@@ -84,7 +88,7 @@ impl SuiteKind {
             Self::Reasoning => Some(quality::QualitySuite::Reasoning),
             Self::Knowledge => Some(quality::QualitySuite::Knowledge),
             Self::Coding => Some(quality::QualitySuite::Coding),
-            Self::Perf | Self::Tools | Self::Retrieval | Self::Speech => None,
+            Self::Perf | Self::Tools | Self::Retrieval | Self::Speech | Self::Custom => None,
         }
     }
 }

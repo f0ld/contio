@@ -175,7 +175,7 @@ enum BenchAction {
         /// reasoning (GSM8K), knowledge (MMLU-Pro), coding (HumanEval, runs code in podman),
         /// retrieval (embedding and reranker models), speech (Whisper word error rate)
         #[arg(long, short, value_delimiter = ',', default_value = "perf",
-              value_parser = ["perf", "tools", "reasoning", "knowledge", "coding", "retrieval", "speech"])]
+              value_parser = ["perf", "tools", "reasoning", "knowledge", "coding", "retrieval", "speech", "custom"])]
         suite: Vec<String>,
         /// Keep other loaded models running (they share memory bandwidth).
         #[arg(long)]
@@ -183,6 +183,9 @@ enum BenchAction {
         /// Don't reload the model (skips load time and memory measurement).
         #[arg(long)]
         no_reload: bool,
+        /// Prompt set for `--suite custom` (TOML, see docs/bench-set.example.toml).
+        #[arg(long)]
+        set: Option<std::path::PathBuf>,
         /// Ask the model not to think (Qwen-style templates) in quality suites.
         #[arg(long)]
         no_thinking: bool,
@@ -420,11 +423,25 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             eprintln!("\x1b[2m{:.1}s\x1b[0m", started.elapsed().as_secs_f64());
         }
         Command::Bench { action } => match action {
-            BenchAction::Run { models, preset, suite, shared, no_reload, no_thinking, power_profile, detach } => {
+            BenchAction::Run { models, preset, suite, shared, no_reload, set, no_thinking, power_profile, detach } => {
+                let custom_set = match &set {
+                    Some(path) => {
+                        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+                        Some(toml::from_str::<Value>(&text).with_context(|| format!("in {}", path.display()))?)
+                    }
+                    None => None,
+                };
+                let mut suite = suite;
+                if custom_set.is_some() && !suite.iter().any(|s| s == "custom") {
+                    suite = vec!["custom".into()];
+                }
                 let body = json!({
+                    "custom_set": custom_set,
                     "models": models, "preset": preset, "suites": suite, "exclusive": !shared, "reload": !no_reload,
                     "power_profile": power_profile, "thinking": if no_thinking { Some(false) } else { None },
                 });
+                // unset options stay out, so newer CLIs work with older daemons
+                let body = Value::Object(body.as_object().cloned().unwrap_or_default().into_iter().filter(|(_, v)| !v.is_null()).collect());
                 let r = client.post("/api/bench", &body).await?;
                 if let Some(result) = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await? {
                     for e in result["errors"].as_array().into_iter().flatten() {

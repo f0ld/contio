@@ -158,7 +158,7 @@
   let speechReport = $derived(selected?.suite === "speech" ? (selected.report as SpeechReportView | null) : null);
   let retrievalReport = $derived(selected?.suite === "retrieval" ? (selected.report as RetrievalReportView | null) : null);
   let qualityReport = $derived(
-    selected && QUALITY.includes(selected.suite) ? (selected.report as QualityReportView | null) : null,
+    selected && (QUALITY.includes(selected.suite) || selected.suite === "custom") ? (selected.report as QualityReportView | null) : null,
   );
 </script>
 

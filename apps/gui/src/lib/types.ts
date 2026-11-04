@@ -300,7 +300,7 @@ export interface PreflightResult {
 }
 
 // Mirrors crates/contio-bench (store::Run) and contiod/src/bench_api.rs.
-export type BenchSuite = "perf" | "tools" | "reasoning" | "knowledge" | "coding" | "retrieval" | "speech";
+export type BenchSuite = "perf" | "tools" | "reasoning" | "knowledge" | "coding" | "retrieval" | "speech" | "custom";
 export type BenchPreset = "quick" | "standard" | "full";
 
 export interface BenchRun {

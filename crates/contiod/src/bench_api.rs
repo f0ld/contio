@@ -47,6 +47,9 @@ pub struct BenchRequest {
     /// `enable_thinking`), for tool-calling and quality suites.
     #[serde(default)]
     pub thinking: Option<bool>,
+    /// The set for the `custom` suite.
+    #[serde(default)]
+    pub custom_set: Option<contio_bench::custom::CustomSet>,
     /// Switch to this power profile for the run and restore it afterwards
     /// (power-saver, balanced, performance). Default: leave it as it is.
     #[serde(default)]
@@ -75,6 +78,16 @@ fn default_suites() -> Vec<SuiteKind> {
 pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>) -> Response {
     if req.models.is_empty() || req.suites.is_empty() {
         return bad_request("`models` and `suites` must not be empty");
+    }
+    if req.suites.contains(&SuiteKind::Custom) {
+        match &req.custom_set {
+            None => return bad_request("the custom suite needs `custom_set`"),
+            Some(set) => {
+                if let Err(e) = set.validate() {
+                    return bad_request(&format!("custom_set: {e}"));
+                }
+            }
+        }
     }
     if let Some(p) = &req.power_profile
         && !contio_bench::power_profile::PROFILES.contains(&p.as_str())
@@ -219,7 +232,10 @@ async fn run_suite(
         "thinking": req.thinking,
     });
     let conditions_json = serde_json::to_value(&conditions).unwrap_or_default();
-    let preset = json!(req.preset).as_str().unwrap_or_default().to_owned();
+    let mut preset = json!(req.preset).as_str().unwrap_or_default().to_owned();
+    if let (SuiteKind::Custom, Some(set)) = (suite, &req.custom_set) {
+        preset = format!("{preset}:{}", set.name);
+    }
     let run_id = state
         .bench
         .start(&NewRun {
@@ -242,6 +258,9 @@ async fn run_suite(
             .await
             .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
         SuiteKind::Retrieval => retrieval(state, id, profile.kind, ctx)
+            .await
+            .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
+        SuiteKind::Custom => custom(state, id, req, ctx)
             .await
             .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
         SuiteKind::Speech => speech(state, id, name, ctx)
@@ -270,6 +289,24 @@ async fn tool_calls(
     let report = contio_bench::tools::run(&state.http, &target, &Suite::builtin(), req.preset.quality_reps(), &JobProgress(ctx)).await;
     drop(lease);
     report
+}
+
+async fn custom(
+    state: &AppState,
+    id: &str,
+    req: &BenchRequest,
+    ctx: &JobCtx,
+) -> Result<contio_bench::quality::QualityReport, String> {
+    let set = req.custom_set.as_ref().ok_or("no custom set")?;
+    ctx.step("loading");
+    let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false, extra: extra(req) };
+    let report = contio_bench::custom::run(&state.http, &target, set, req.preset.quality_reps(), &JobProgress(ctx)).await;
+    drop(lease);
+    report.map(|mut r| {
+        r.suite = "custom".into();
+        r
+    })
 }
 
 async fn speech(

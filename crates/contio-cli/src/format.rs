@@ -189,7 +189,7 @@ pub fn bench_runs(runs: &[Value]) -> String {
     }
     let of = |s: &str| -> Vec<&Value> { runs.iter().filter(|r| r["suite"] == s).collect() };
     let quality: Vec<&Value> =
-        runs.iter().filter(|r| matches!(r["suite"].as_str(), Some("reasoning" | "knowledge" | "coding"))).collect();
+        runs.iter().filter(|r| matches!(r["suite"].as_str(), Some("reasoning" | "knowledge" | "coding" | "custom"))).collect();
     let mut parts = Vec::new();
     if !of("perf").is_empty() {
         parts.push(perf_runs(&of("perf")));

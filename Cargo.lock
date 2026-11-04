@@ -761,12 +761,15 @@ dependencies = [
  "contio-core",
  "contio-hw",
  "futures-util",
+ "jsonschema",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "zbus 6.2.1",
 ]
@@ -797,6 +800,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]

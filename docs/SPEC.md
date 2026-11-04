@@ -389,7 +389,8 @@ contio serve                            # run daemon in foreground
 - [x] Retrieval suite for embedding and reranker models (`registry/bench/retrieval.json`, written for contio): 24 paraphrased queries over 48 documents, half of them same-topic distractors; recall@1 and MRR. nomic-embed-text-v1.5 and Qwen3 Reranker 0.6B: 92% / MRR 0.96 each (an easier first version without distractors gave 100% for both).
 - [x] Speech suite: word error rate on 20 short LibriSpeech test-clean utterances (CC BY 4.0, 2.1 MB, compiled in) plus real-time factor; also runs FLM's NPU Whisper through its alias.
 - [x] "Thinking off" variant (`thinking: false` → `chat_template_kwargs.enable_thinking = false`) for tool-calling and quality suites; recorded with the run.
-- [ ] Custom prompt sets; arena with Elo; LLM-as-judge
+- [x] Custom prompt sets as TOML (not YAML: the same format as `config.toml`; `docs/bench-set.example.toml`): per item `contains`, `not_contains`, `regex`, `json_schema` (sent as `response_format` and validated), `max_tokens`; optional system prompt. `contio bench run <model> --set file.toml`.
+- [ ] Arena with Elo; LLM-as-judge
 - [ ] Quant-ladder and device-comparison views
 
 Findings so far:

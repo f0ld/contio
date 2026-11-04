@@ -1,0 +1,31 @@
+# A custom benchmark set: your own prompts with checks.
+#   contio bench run <model> --suite custom --set docs/bench-set.example.toml
+# Every item needs at least one check. Text checks ignore case.
+
+name = "contio-basics"
+system = "You are a concise assistant."
+
+[[items]]
+id = "capital"
+prompt = "What is the capital of Portugal? One word."
+contains = ["Lisbon"]
+
+[[items]]
+id = "units"
+prompt = "Convert 5 kilometres to metres. Reply with the number only."
+regex = "\\b5,?000\\b"
+
+[[items]]
+id = "refusal-free"
+prompt = "Give me one tip for a longer laptop battery life."
+not_contains = ["I can't", "I cannot"]
+
+[[items]]
+id = "json-person"
+prompt = "Return Ada Lovelace's birth year and first name."
+max_tokens = 2048
+
+[items.json_schema]
+type = "object"
+required = ["first_name", "birth_year"]
+properties = { first_name = { type = "string" }, birth_year = { type = "integer", minimum = 1815, maximum = 1815 } }

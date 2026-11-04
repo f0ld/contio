@@ -17,6 +17,7 @@ clap.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 tokio.workspace = true
 
 [lints]
