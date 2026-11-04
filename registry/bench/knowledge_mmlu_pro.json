@@ -1,0 +1,998 @@
+{
+ "source": "https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro (test split)",
+ "license": "MIT",
+ "seed": 20261104,
+ "items": [
+  {
+   "id": "mmlu-pro-3020",
+   "category": "biology",
+   "question": "A deck of playing cards is thoroughly shuffled and a card is drawn from the deck. What is the probability that the card drawn is the ace of diamonds?",
+   "options": [
+    "1/53",
+    "3/52",
+    "2/51",
+    "2/52",
+    "4/52",
+    "1/50",
+    "1/13",
+    "1/52",
+    "1/26",
+    "1/51"
+   ],
+   "answer": "H"
+  },
+  {
+   "id": "mmlu-pro-3138",
+   "category": "biology",
+   "question": "In a group of students, about 36 percent could roll their tongues, a trait determined by a dominant gene. The other 64 percent of the students werenonrollers. Calculate the frequencies of the gene R for tongue rolling and its recessive allele r fornonrolling.",
+   "options": [
+    "frequency of R = 0.5, frequency of r = 0.5",
+    "frequency of R = 0.7, frequency of r = 0.3",
+    "frequency of R = 0.4, frequency of r = 0.6",
+    "frequency of R = 0.18, frequency of r = 0.82",
+    "frequency of R = 0.2, frequency of r = 0.8",
+    "frequency of R = 0.6, frequency of r = 0.4",
+    "frequency of R = 0.3, frequency of r = 0.7",
+    "frequency of R = 0.64, frequency of r = 0.36",
+    "frequency of R = 0.36, frequency of r = 0.64",
+    "frequency of R = 0.8, frequency of r = 0.2"
+   ],
+   "answer": "E"
+  },
+  {
+   "id": "mmlu-pro-3187",
+   "category": "biology",
+   "question": "Algae may be microscopic single-celled organisms or enormousmulticellularseaweeds hundreds of feet long. The body of one of these organisms is termed athallus. How does athallusdiffer from a plant body?",
+   "options": [
+    "A plant body shows differentiation of parts, with its roots, stems, and leaves all varying greatly in structure and in function. Multicellular algae show very little, if any, tissue differentiation.",
+    "Algae have a more complex structure than plants",
+    "A thallus has a rigid cell wall made of cellulose, which is absent in plant cells",
+    "A thallus consists of a single layer of cells, unlike the multilayered tissues of plants",
+    "Algae possess true flowers and seeds, which differentiates them from plants",
+    "Algae cells are much smaller than plant cells",
+    "Algae have vascular systems similar to plants for transporting nutrients",
+    "Algae bodies are typically organized into root-like, stem-like, and leaf-like structures",
+    "Algae are capable of photosynthesis while plants are not",
+    "Algae perform cellular respiration, while plants only perform photosynthesis"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-3455",
+   "category": "biology",
+   "question": "Explain the types and effects of competition.",
+   "options": [
+    "Competition is the active demand of two or more organisms for a common vital resource. It can be categorized into Contest competition and Scramble competition.",
+    "Competition is a cooperative interaction where organisms work together to maximize resource use.",
+    "Competition only involves physical confrontation.",
+    "Competition is solely determined by the availability of water resources.",
+    "Competition is an interaction that only occurs within a species, known as Intraspecific competition.",
+    "Competition can be categorized into Predation competition and Mutualism competition.",
+    "Competition is a natural process that always results in the extinction of one species."
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-90",
+   "category": "business",
+   "question": "(a) Given the two discount series of 30-10-2(1/2) % and 25-15-2%, which is better? (b) Given the discount series 15-15% and the single rate of 30%, which is better?",
+   "options": [
+    "The series 30-10-2(1/2)% and the single rate of 25% are better",
+    "The single rate of 25% and the series 15-15% are better",
+    "The series 30-10-2(1/2) % and the series 15-15% are better",
+    "The series 25-15-2% and the single rate of 30% are better",
+    "The series 30-10-2(1/2)% is better, but there is no difference between the series 15-15% and the single rate of 30%",
+    "Both discount series are equally beneficial",
+    "The series 25-15-2% is better, and the series 15-15% and the single rate of 30% are equally beneficial",
+    "The series 25-15-2% and the series 15-15% are better",
+    "The series 25-15-2% and the single rate of 25% are better",
+    "The series 30-10-2(1/2) % and the single rate of 30% are better"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-305",
+   "category": "business",
+   "question": "The milline rate is the cost of placing one agate line of space for one million readers. What is the milline rate for newspaper Y whose circulation is 878,000 and whose cost is $1.70 per line.",
+   "options": [
+    "$878,000",
+    "$0.97",
+    "$1.70",
+    "$0.85",
+    "$1.94",
+    "$1.138",
+    "$0.193",
+    "$3.40",
+    "$170.00",
+    "$2.30"
+   ],
+   "answer": "E"
+  },
+  {
+   "id": "mmlu-pro-585",
+   "category": "business",
+   "question": "The premium rate on homeowners insurance for the ABC Insurance Company is $.96 per $100. In addition, ABC allows a discount of 20% of the premium if the homeowner accepts a policy containing a $250 deductible clause. Calculate the premium for a homeowners policy for $27,000 containing a $250 deductible clause.",
+   "options": [
+    "$51.84",
+    "$220",
+    "$184.80",
+    "$259.20",
+    "$145.20",
+    "$207",
+    "$246.40",
+    "$102",
+    "$123.84",
+    "$165.60"
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-681",
+   "category": "business",
+   "question": "What are, according to Wood (1991), the three outcomes of CSR?",
+   "options": [
+    "Social policies, Social responsibility and Social impacts",
+    "Social policies, Social evidencing and Social impacts",
+    "Social policies, Social audits, and Social impacts",
+    "Social policies, Social programmes and Social analysis",
+    "Social evaluations, Social programmes and Social impacts",
+    "Social policies, Social programmes and Social discussions",
+    "Social policies, Social impacts and Social justice",
+    "Social assessments, Social programmes and Social impacts",
+    "Social planning, Social programmes and Social impacts",
+    "Social policies, Social programmes and Social impacts"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-3539",
+   "category": "chemistry",
+   "question": "A radioactive isotope, which is used in diagnostic imaging, has a half-life of 6.0 hours. If a quantity of this isotope has an activity of 150 mCi when it is delivered to a hospital, how much activity will remain 24 hours after delivery? (mCi = microcuries)",
+   "options": [
+    "150 mCi",
+    "9.4 mCi",
+    "4.7 mCi",
+    "12.5 mCi",
+    "25 mCi",
+    "50 mCi",
+    "19 mCi",
+    "75 mCi",
+    "38 mCi",
+    "2.3 mCi"
+   ],
+   "answer": "B"
+  },
+  {
+   "id": "mmlu-pro-3676",
+   "category": "chemistry",
+   "question": "Chlorine may be prepared by the action of KClO_3 on HCl, and the reaction may be represented by the equation: KClO_3 + 6HCl \\rightarrow KCl + 3Cl_2 + 3H_2 O Calculate the weight of KClO_3 which would be required to produce 1.0 liter of Cl_2 gas at STP. R = .082 liter-atm/mole -°K.",
+   "options": [
+    "2.75 g",
+    "1.50 g",
+    "3.00 g",
+    "0.92 g",
+    "2.50 g",
+    "1.00 g",
+    "1.20 g",
+    "2.10 g",
+    "3.68 g",
+    "1.84 g"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-4325",
+   "category": "chemistry",
+   "question": "One curie is defined as the amount of material, which is equivalent to one gram of radium, that gives 3.7 × 10^10 nuclear disintegrations per second. The half-life of ^210At is 8.3 hr. How many grams of astatine (At) would equal one curie?",
+   "options": [
+    "9.84 × 10^-7 g",
+    "3.29 × 10^-7 g",
+    "1.23 × 10^-6 g",
+    "7.71 × 10^-7 g",
+    "4.15 × 10^-7 g",
+    "6.32 × 10^-7 g",
+    "1.47 × 10^-6 g",
+    "5.47 × 10^-7 g",
+    "8.56 × 10^-7 g",
+    "8.01 × 10^-7 g"
+   ],
+   "answer": "D"
+  },
+  {
+   "id": "mmlu-pro-4646",
+   "category": "chemistry",
+   "question": "A piece of iron weighing 20.0 g at a temperature of 95.0°C was placed in 100.0 g of water at 25.0°C. Assuming that no heat is lost to the surroundings, what is the resulting temperature of the iron and water? Specific heats: iron = .108 cal/g\\rule{1em}{1pt}C°; water = 1.0 cal/g\\rule{1em}{1pt}C°.",
+   "options": [
+    "30.0°C",
+    "28.6°C",
+    "24.0°C",
+    "31.7°C",
+    "26.48°C",
+    "25.2°C",
+    "33.8°C",
+    "29.3°C",
+    "27.5°C",
+    "32.5°C"
+   ],
+   "answer": "E"
+  },
+  {
+   "id": "mmlu-pro-10370",
+   "category": "computer science",
+   "question": "Encapsulating Security Payload (ESP) belongs to which Internet Security Protocol?",
+   "options": [
+    "Secure File Transfer Protocol",
+    "Secure IP Protocol",
+    "Secure Socket Layer Protocol",
+    "Internet Key Exchange Protocol",
+    "Transport Layer Security Protocol",
+    "Secure Shell Protocol",
+    "Secure Http Protocol",
+    "Point-to-Point Tunneling Protocol",
+    "Hypertext Transfer Protocol Secure",
+    "Network Security Protocol"
+   ],
+   "answer": "B"
+  },
+  {
+   "id": "mmlu-pro-10552",
+   "category": "computer science",
+   "question": "For all strings x, the function x^M is defined recursively as follows.\ne^M= e, and\nif w is a string and a is a string with length 1, then\n(aw)^M = aw^Ma.\nLet a be a string with length 1, and let x and y be arbitrary strings. Which of the following is true?",
+   "options": [
+    "a^M = a",
+    "(ax)^M = (xa)^M",
+    "(xy)^M = y^Mx^M",
+    "None of the above"
+   ],
+   "answer": "D"
+  },
+  {
+   "id": "mmlu-pro-10589",
+   "category": "computer science",
+   "question": "The language {ww | w in (0 + 1)*} is",
+   "options": [
+    "accepted by some Turing machine, but by no pushdown automaton",
+    "context-free, but not regular",
+    "accepted by some finite automaton, but not pushdown automaton",
+    "accepted by some Turing machine and some pushdown automaton",
+    "accepted by any context-free grammar, but not regular",
+    "accepted by some context-free grammar, but not Turing machine",
+    "regular, but not context-free",
+    "accepted by some pushdown automaton, but not context-free",
+    "not accepted by any Turing machine"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-10594",
+   "category": "computer science",
+   "question": "In the Internet Protocol (IP) suite of protocols, which of the following best describes the purpose of the Address Resolution Protocol?",
+   "options": [
+    "To determine the host name of a given hardware address",
+    "To translate Web addresses to host names",
+    "To determine the IP address of a given hardware address",
+    "To translate hardware addresses to IP addresses",
+    "To determine the hardware address of a given IP address",
+    "To translate IP addresses to host names",
+    "To determine the host name of a given IP address",
+    "To translate host names to Web addresses",
+    "To determine the IP address of a given host name",
+    "To determine the hardware address of a given host name"
+   ],
+   "answer": "E"
+  },
+  {
+   "id": "mmlu-pro-6992",
+   "category": "economics",
+   "question": "Suppose that we have estimated a GARCH model for daily equity returns, and we are interested in producing a 10-day forecast of the volatility (measured by the standard deviation of returns) for use in a value at risk model. How could such a forecast most validly be calculated?",
+   "options": [
+    "Produce 1, 2, 3, ..., 10 step ahead conditional variance forecasts, take the square roots of each one and multiply them",
+    "Produce a 1-step ahead conditional variance forecast, square it and multiply it by 10",
+    "Produce 1, 2, 3, ..., 10 step ahead conditional variance forecasts and add them up",
+    "Produce 1, 2, 3, ..., 10 step ahead conditional variance forecasts, take the square roots of each one and add them up",
+    "Produce a 1-step ahead conditional variance forecast, take its square root and multiply it by the square root of 10",
+    "Produce 1, 2, 3, ..., 10 step ahead conditional variance forecasts and add them up and take the square root",
+    "Produce a 10-step ahead conditional variance forecast, take its square root",
+    "Produce a 1-step ahead conditional variance forecast and multiply it by 10",
+    "Produce 10 one-step ahead conditional variance forecasts, add them up and take the square root",
+    "Produce 1, 2, 3, ..., 10 step ahead conditional variance forecasts, add them up and divide by 10"
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-7317",
+   "category": "economics",
+   "question": "A Hausman test would be used for",
+   "options": [
+    "Testing for the presence of multicollinearity in a regression model",
+    "Checking the validity of the instrumental variables",
+    "Determining whether a variable is endogenous or exogenous",
+    "Determining whether an equation that is part of a simultaneous system is identified",
+    "Determining whether 2SLS or ILS is optimal",
+    "Determining whether a simultaneous framework is needed for a particular variable",
+    "Determining the order of integration in a time series",
+    "Determining whether the structural form equations can be obtained via substitution from the reduced forms",
+    "Testing the null hypothesis in a regression model",
+    "Checking the goodness of fit in a multiple regression model"
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-7400",
+   "category": "economics",
+   "question": "What is the international balance of payments?",
+   "options": [
+    "A fiscal record of a nation's consumer spending on international goods and services",
+    "A financial report of a country's national debt",
+    "An annual accounting statement, summarizing all transactions between a nation's residents and residents of all other foreign nations",
+    "A monthly report detailing a country's export and import of goods and services",
+    "A comprehensive ledger of a country's investments and loans",
+    "A quarterly financial statement of a nation's foreign exchange reserves",
+    "A record of a nation's domestic financial transactions",
+    "An economic indicator of a nation's total accumulated wealth",
+    "An economic measure of a nation's GDP",
+    "A biannual summary of a nation's trade tariffs and subsidies"
+   ],
+   "answer": "C"
+  },
+  {
+   "id": "mmlu-pro-7542",
+   "category": "economics",
+   "question": "Suppose an American firm sells a large piece of machinery toa British firm for $40,000. Describe the flow of money in thissituation. Assume the exchange rate is $2 = \\textsterling1.",
+   "options": [
+    "The British importer pays £20,000 to the American exporter.",
+    "The British importer pays $80,000 to the American exporter.",
+    "The British importer pays $20,000 to the American exporter.",
+    "The American exporter receives £40,000 from the British importer.",
+    "The American exporter pays $40,000 to the British importer.",
+    "The American exporter receives $20,000 from the British importer.",
+    "The American exporter pays £20,000 to the British importer.",
+    "The British importer pays £40,000 to the American exporter.",
+    "The British importer pays $40,000 to the American exporter.",
+    "The British importer pays $40,000 and receives \\textsterling20,000 in return from the American exporter."
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-11532",
+   "category": "engineering",
+   "question": "Find the magnitude of E for a plane wave in free space, if the magnitude of H for this wave is 5 amp/meter.",
+   "options": [
+    "1200 volts/meter",
+    "5 ohms",
+    "1883 volts/meter",
+    "940.5 volts/meter",
+    "5 volts/meter",
+    "1883 ohms",
+    "600 volts/meter",
+    "376.7 volts/meter",
+    "75.34 ohms",
+    "75.34 volts/meter"
+   ],
+   "answer": "C"
+  },
+  {
+   "id": "mmlu-pro-12010",
+   "category": "engineering",
+   "question": "What is the impedance of a circuit if 100\\angle0° V causes a current7.07 + j7.07 A?",
+   "options": [
+    "6.5 - j2.3 Ω",
+    "10 - j35 Ω",
+    "8.2 - j5.7 Ω",
+    "12.1 + j3.5 Ω",
+    "7.07 + j7.07 Ω",
+    "14 + j14 Ω",
+    "0 - j14 Ω",
+    "7.07 - j7.07 Ω",
+    "5 - j10 Ω",
+    "10 - j7 Ω"
+   ],
+   "answer": "C"
+  },
+  {
+   "id": "mmlu-pro-12143",
+   "category": "engineering",
+   "question": "Estimate the pressure which would be exerted by 8.2 lb of CO in a 1-ft^3 container at - 78°F, employing (a) the ideal-gas equation, (b) the vanderWaals equation of state, and (c) theRedlich-Kwongequation.",
+   "options": [
+    "1500psia = 102.0atm, 88.9 atm, 92.4atm",
+    "1000psia = 68.0atm, 58.8 atm, 62.5atm",
+    "850psia = 57.8atm, 50.0 atm, 53.1atm",
+    "1400psia = 95.2atm, 82.3 atm, 85.0atm",
+    "900psia= 60.9atm, 70.5 atm, 75.8atm",
+    "800psia = 54.4atm, 47.6 atm, 50.2atm",
+    "1600psia = 108.9atm, 94.5 atm, 98.6atm",
+    "1200psia= 81.7atm, 68.2 atm, 70.8atm",
+    "1300psia= 88.2atm, 75.6 atm, 80.9atm",
+    "1100psia= 75.1atm, 65.7 atm, 68.5atm"
+   ],
+   "answer": "H"
+  },
+  {
+   "id": "mmlu-pro-12148",
+   "category": "engineering",
+   "question": "A model pump has an impeller of 6 in. diameter. When runningat 1200 rpm, the pump delivers 2cfsagainst a head of16 ft. A similar pump is required to discharge 40cfsat 600 rpm.What should be the diameter of this pump, and whathead will it develop?",
+   "options": [
+    "Diameter: 1.8 ft, Head: 36 ft",
+    "Diameter: 2.2 ft, Head: 30 ft",
+    "Diameter: 1.71 ft, Head: 46.8 ft",
+    "Diameter: 2.5 ft, Head: 50 ft",
+    "Diameter: 2.4 ft, Head: 55 ft",
+    "Diameter: 3 ft, Head: 60 ft",
+    "Diameter: 1.2 ft, Head: 20 ft",
+    "Diameter: 2 ft, Head: 45 ft",
+    "Diameter: 1.5 ft, Head: 40 ft",
+    "Diameter: 1.9 ft, Head: 42 ft"
+   ],
+   "answer": "C"
+  },
+  {
+   "id": "mmlu-pro-6121",
+   "category": "health",
+   "question": "It has been observed that a reduction in family size and improved sanitary condition have led to an increase in allergic conditions. The 'hygiene hypothesis' suggests that\n",
+   "options": [
+    "Living on a working farm will increase the development of atopic diseases",
+    "Particular care must be taken during breast feeding in high risk infants",
+    "Living on a working farm will help reducing the development of atopic diseases",
+    "Using antibiotics frequently will reduce allergies",
+    "Living in urban areas will help reduce the development of atopic diseases",
+    "The frequent use of antiseptic swipes will reduce allergies",
+    "Exposure to allergens in early childhood will increase the risk of developing allergies",
+    "Staying in highly sanitized environments will reduce the development of atopic diseases",
+    "Breastfeeding should be avoided in high risk infants to prevent allergies",
+    "The use of probiotics in infants will increase the development of atopic diseases"
+   ],
+   "answer": "C"
+  },
+  {
+   "id": "mmlu-pro-6297",
+   "category": "health",
+   "question": "The DiGeorge/Shprintzen syndrome is caused by a deletion in which chromosome?",
+   "options": [
+    "16",
+    "7",
+    "15",
+    "10",
+    "1",
+    "22",
+    "20",
+    "4",
+    "18",
+    "13"
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-6713",
+   "category": "health",
+   "question": "Which of the following is the most special characteristic of the adaptive immune system?",
+   "options": [
+    "Innate immune response",
+    "T cells",
+    "Antigen-presenting cells",
+    "Natural killer cells",
+    "Clonal expansion of pre-existing antibodies and/or T cells",
+    "Memory B cells",
+    "Antibodies",
+    "Clonal expansion of new antibodies and/or T cells",
+    "White blood cells"
+   ],
+   "answer": "E"
+  },
+  {
+   "id": "mmlu-pro-6804",
+   "category": "health",
+   "question": "A 42-year-old man comes to the physician because of malaise, muscle and joint pain, and temperatures to 38.4°C (101.1°F) for 3 days. Three months ago, he underwent cadaveric renal transplantation resulting in immediate kidney function. At the time of discharge, his serum creatinine concentration was 0.8 mg/dL. He is receiving cyclosporine and corticosteroids. Examination shows no abnormalities. His leukocyte count is 2700/mm3 , and serum creatinine concentration is 1.6 mg/dL; serum cyclosporine concentration is in the therapeutic range. A biopsy of the transplanted kidney shows intracellular inclusion bodies. Which of the following is the most appropriate next step in management? ",
+   "options": [
+    "Increase the dosage of corticosteroids",
+    "Begin ganciclovir therapy",
+    "Decrease the dosage of cyclosporine",
+    "Increase the dosage of cyclosporine",
+    "Begin acyclovir therapy",
+    "Begin amphotericin therapy",
+    "Discontinue all medications and monitor the patient's condition",
+    "Perform a second kidney transplant",
+    "Decrease the dosage of corticosteroids",
+    "Begin interferon therapy"
+   ],
+   "answer": "B"
+  },
+  {
+   "id": "mmlu-pro-4725",
+   "category": "history",
+   "question": "This question refers to the following information.\n\"The substitution of Plato for the scholastic Aristotle was hastened by contact with Byzantine scholarship. Already at the Council of Ferrera (1438), which nominally reunited the Eastern and Western churches, there was a debate in which the Byzantines maintained the superiority of Plato to Aristotle. Cosimo and Lorenzo de Medici were both addicted to Plato; Cosimo founded and Lorenzo continued the Florentine Academy, which was largely devoted to the study of Plato&…The humanists of the time, however, were too busy acquiring knowledge of antiquity to be able to produce anything of value.\"\nBertrand Russell, British philosopher, History of Western Philosophy, 1946\nAccording to the information in the text, the schools founded by the Medici family most favored a philosophy known as",
+   "options": [
+    "Renaissance humanism",
+    "Empiricism",
+    "Aristotelianism",
+    "Byzantinism",
+    "Stoicism",
+    "Scholasticism",
+    "Existentialism",
+    "Neoplatonism",
+    "Neoclassicism",
+    "Rationalism"
+   ],
+   "answer": "H"
+  },
+  {
+   "id": "mmlu-pro-4781",
+   "category": "history",
+   "question": "Genetic evidence indicates that the modern Inuit are the descendants of which people?",
+   "options": [
+    "Mi'kmaq",
+    "Norse",
+    "Beothuk",
+    "Dorset",
+    "Nootka",
+    "Clovis",
+    "Tuniit",
+    "Vinland",
+    "Paleo-Eskimos",
+    "Thule"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-4825",
+   "category": "history",
+   "question": "This question refers to the following information.\n\"The only force which is strong enough to break down social convention is economic necessity. . . . The economic necessity which has forced women out of the home and into the world of business has completely annihilated the old idea that a woman should eat only in the privacy of her household or in the homes of her friends, has created the absolutely new social phenomenon of women eating in public, unescorted by men, by the tens of thousands, and has given rise to a wholly new phase of the restaurant business.\"\n—The New York Times, October 15, 1905\nThe scenario described in the passage above is most directly reflected in the ideas of which of the following?",
+   "options": [
+    "Civil Rights Act of 1964.",
+    "Pure Food and Drug Act.",
+    "The Social Security Act",
+    "The Glass-Steagall Act",
+    "The 19th Amendment",
+    "The Emancipation Proclamation",
+    "The Americans with Disabilities Act",
+    "Interstate Commerce Act.",
+    "Equal Rights Amendment.",
+    "The Fair Labor Standards Act"
+   ],
+   "answer": "I"
+  },
+  {
+   "id": "mmlu-pro-5026",
+   "category": "history",
+   "question": "This question refers to the following information.\nI walk alongside the column, ask what's going on.\nA soldier says simply: \"They call up more every day.\n\"Some of us were sent north to the Yellow River at age fifteen,\nAnd now at forty we're heading off to the garrisons in the west.\nOn our first tour, the village headman had to tie our bandannas for us.\nWhen we came back, our hair was white, but still there's more unrest.\nThe frontier garrisons run with blood, enough to fill an ocean,\nBut the Martial Emperor's territorial ambitions have yet to crest.\nIn the hundred districts east of the mountains, throughout the land of Han,\nThere must be ten thousand villages that brambles now infest.\nEven if wives are strong enough to handle a hoe and plow,\nThe crops grow every which way, the fields are all a mess.\nIt's hardest for the Shanxi men, with their reputations as fighters:\nThey're rounded up like dogs or chickens, every male impressed.\n\"But sir, though it's good of you to ask,\nComplaining isn't part of the soldier's task.\nWe can only shake our heads. Take this winter:\nThe Shanxi troops were never sent home.\nThe District Officers are demanding the land tax,\nBut where will it come from? You can't get blood from a stone!\nI honestly think it's bad luck to bear a son now,\nIt's better to have a daughter: at least she can marry\nAnd live with the neighbors next door.\nBut a son will end up lying on some distant prairie.\"\nDu Fu, \"Ballad of the Army Carts,\" ca. 750 C.E.\nBased on the poem and your knowledge of history, Tang relations with western nomadic peoples and frontier peoples relied on which of the following?",
+   "options": [
+    "The establishment of a network of spies and informants among the nomadic tribes",
+    "Adroit diplomacy and establishment of client relationships with bordering nomads",
+    "The payment of tribute to nomadic rulers",
+    "The forced relocation of frontier peoples to central China",
+    "The use of economic incentives to secure the loyalty of nomadic rulers",
+    "The negotiation of peace treaties with nomadic rulers",
+    "The dissemination of Chinese culture and traditions among frontier peoples",
+    "The permanent settlement of Han Chinese in frontier zones",
+    "The ability of the Tang emperor to project military power on the frontier in order to impose his will"
+   ],
+   "answer": "I"
+  },
+  {
+   "id": "mmlu-pro-1534",
+   "category": "law",
+   "question": "A man wearing a jacket and jeans walked along a city street at night in a high crime area known for drug trafficking and gun violence. He saw two police officers walking toward him. The officers were checking on a 911 call from a resident who observed a man in jeans and a jacket apparently selling drugs to people on the street. When the police first saw him, he was walking alone, in the area that the woman identified. As they approached, he suddenly crossed the street by jaywalking. They followed, and approaching from behind, asked him to stop. He started walking faster, away from them. The officers saw what appeared to be a heavy object bulging in his pocket as he moved. The officers, with over 10 years of foot patrol experience, stepped up and stopped him. They patted him down and found a concealed, unlicensed handgun in the jacket pocket. They then made a full search and found 50 packets of heroin. He filed a motion to suppress the gun and drug evidence. Will the court likely suppress the evidence?",
+   "options": [
+    "No, because the accumulation of factors all added up to reasonable suspicion for a stop and articulable suspicion for a frisk.",
+    "No, because the man's suspicious behavior and the bulge in his pocket gave the police probable cause to search him.",
+    "Yes, because the police lacked reasonable suspicion to stop the man simply because he crossed the street and walked faster away from them.",
+    "Yes, because the police didn't have a warrant to search the man.",
+    "Yes, because the heavy object in the man's pocket could have been anything and didn't necessarily indicate criminal activity.",
+    "No, because the police had probable cause to make an arrest when the man began to walk away from them and walk even faster as they followed him.",
+    "No, because the police had witnessed a crime, jaywalking, which gave them the authority to stop the man.",
+    "Yes, because they didn't know if this was the same man, they observed nothing illegal except jaywalking, and he had a right to avoid them under the circumstances.",
+    "Yes, because the police had no evidence that the man was the same one the resident had reported.",
+    "No, because the man matched the description of the suspected drug dealer and was in a high crime area."
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-1904",
+   "category": "law",
+   "question": "A businessman is the owner of a pet products company, which is engaged in the manufacture and sale of a variety of pet supplies. The businessman's company manufactures such products as pet furniture, toys, beds, collars, leashes, cages, and vitamins. These items are distributed to pet stores throughout the United States and Europe. For many years, the company has conducted its operations from a large factory located in a small town in the southern part of the state. One of the businessman's biggest selling products is specially manufactured high-frequency dog-calling whistles. These whistles are sold to dog-training schools and canine divisions of many police departments. Although these whistles are not audible to people, they are audible to dogs over considerable distances. Two years ago, a breeder purchased an undeveloped lot in the small town in which the company's factory was located. On her property, the breeder constructed a pet hotel, which was used as a boarding kennel for dogs and cats. This boarding facility was situated about 100 yards from the company's factory. Unknown to the breeder, high-frequency sound waves often emanated from the company's factory when dog-calling whistles were being tested. These sound waves caused the breeder's dogs to howl uncontrollably for many hours during the day and seriously interfered with the operation of her business. The breeder now brings an action against the businessman and the company to recover damages for the interference with her business caused by the high-frequency sound that reaches her kennel. The court should rule in favor of",
+   "options": [
+    "the breeder, because the businessman failed to notify the breeder about the high-frequency sound waves.",
+    "the businessman, because the breeder's business is abnormally sensitive to harm caused by the high-frequency sound waves.",
+    "the businessman, because the breeder came to the nuisance after his factory had already been in operation for a number of years.",
+    "the breeder, because the businessman intentionally did not inform about the high-frequency sound waves.",
+    "the breeder, because the businessman is manufacturing a product that is causing harm to her business.",
+    "the businessman, because the high-frequency sound waves do not harm people or the environment.",
+    "the breeder, because the high-frequency sound waves constitute a trespass to her premises.",
+    "the businessman, because the breeder should have soundproofed her kennel.",
+    "the businessman, because the breeder should have done a thorough investigation before purchasing the property."
+   ],
+   "answer": "B"
+  },
+  {
+   "id": "mmlu-pro-1916",
+   "category": "law",
+   "question": "A defendant was prosecuted for mail fraud. At trial, the defendant moved to have all witnesses excluded from the courtroom, and the court granted the motion. The government named the investigating FBI agent as its designated representative. Upon learning that the agent would be giving testimony during the trial, the defendant moved that the agent also be excluded from the courtroom. Should the defendantÕs motion be granted?",
+   "options": [
+    "Yes, because the agentÕs testimony might be influenced by the testimony of other witnesses.",
+    "No, provided that the government can show that the agentÕs presence is essential to the presentation of its case.",
+    "Yes, because the defendant has a right to exclude all persons who may be called as government witnesses.",
+    "Yes, as the agent's potential bias could affect the fairness of the trial.",
+    "No, as the agent's role in the investigation makes his presence necessary for legal proceedings.",
+    "No, because the government has a right to have its designated representative remain in the courtroom through-out the trial.",
+    "Yes, to prevent the possibility of the agent influencing other witnesses.",
+    "Yes, as all witnesses, regardless of their role, should be excluded to ensure impartiality.",
+    "No, as the agent's presence does not necessarily influence the outcome of the trial."
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-1961",
+   "category": "law",
+   "question": "Congress has recently enacted a statute designed to prevent price gouging of gasoline by private retail sellers. To help administer the new statute Congress created a seven-member agency, four members of which were appointed by the President, two by the Senate, and one by the Speaker of the House. The agency was authorized to issue rules interpreting regulations prescribed under existing federal law. It was also authorized to issue \"cease and desist\" orders after hearings against private retail sellers of gasoline who \"intentionally engaged in price gouging. \" In this regard, violations of the cease and desist orders were made punishable by fine and/or imprisonment. Which of the following is the strongest constitutional argument against the authority of this agency?",
+   "options": [
+    "Congress may not delegate to the agency power to interpret regulations without the approval of the President.",
+    "Congress may not delegate to the agency power to issue fines.",
+    "Congress may not delegate to the agency power to imprison private citizens.",
+    "Congress may not delegate enforcement of a federal law in any governmental body other than the U. S. Attorney General or the courts.",
+    "Congress may not delegate to the agency power to make \"cease and desist\" orders, the violation of which is punishable by imprisonment.",
+    "Congress may not delegate to the agency power to make interpretations of existing federal laws.",
+    "Congress may not create an agency to regulate private business practices.",
+    "Congress may not delegate to the agency power to regulate prices.",
+    "Congress may not retain the power to appoint even a minority of members of such an agency.",
+    "Congress may not delegate power to an agency without the approval of the Supreme Court."
+   ],
+   "answer": "I"
+  },
+  {
+   "id": "mmlu-pro-8480",
+   "category": "math",
+   "question": "The symbol $5!$ means $5\\cdot 4\\cdot 3\\cdot 2\\cdot 1$. What is the greatest odd integer that is a factor of $5!$ ?",
+   "options": [
+    "31",
+    "3",
+    "7",
+    "5",
+    "45",
+    "21",
+    "1",
+    "25",
+    "15",
+    "9"
+   ],
+   "answer": "I"
+  },
+  {
+   "id": "mmlu-pro-8616",
+   "category": "math",
+   "question": "A basketball team has 12 players, including 5 guards and 7 forwards. How many different starting lineups can be formed that include 3 guards and 2 forwards?",
+   "options": [
+    "350",
+    "245",
+    "210",
+    "126",
+    "150",
+    "300",
+    "180",
+    "105",
+    "132",
+    "120"
+   ],
+   "answer": "C"
+  },
+  {
+   "id": "mmlu-pro-8701",
+   "category": "math",
+   "question": "Use mental math to solve 8y = 56.",
+   "options": [
+    "8",
+    "10",
+    "4",
+    "14",
+    "6",
+    "11",
+    "5",
+    "7",
+    "9",
+    "12"
+   ],
+   "answer": "H"
+  },
+  {
+   "id": "mmlu-pro-8781",
+   "category": "math",
+   "question": "A college admissions officer is interested in comparing the SAT math scores of high school applicants who have and have not taken AP Statistics. She randomly pulls the files of five applicants who took AP Statistics and five applicants who did not, and proceeds to run a t-test to compare the mean SAT math scores of the two groups. Which of the following is a necessary assumption?",
+   "options": [
+    "The population of SAT scores from each group is not normally distributed.",
+    "The SAT scores from each group are unrelated.",
+    "The mean SAT scores from each group are similar.",
+    "The SAT scores from each group are skewed.",
+    "The population variances from each group are known.",
+    "The population of SAT scores from each group is normally distributed.",
+    "The population variances from the two groups are unequal.",
+    "The population variances from each group are unknown.",
+    "The population variances from the two groups are equal.",
+    "The population variances from each group are estimated."
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-5245",
+   "category": "other",
+   "question": "How many $100 bills does it take to equal one million dollars?",
+   "options": [
+    "five hundred thousand",
+    "five thousand",
+    "two thousand",
+    "one hundred thousand",
+    "one thousand",
+    "fifty thousand",
+    "twenty thousand",
+    "one hundred",
+    "one million",
+    "ten thousand"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-5381",
+   "category": "other",
+   "question": "At the time of independence, there were already hundreds of thousands of university graduates in ____, but hardly any at all in ____.",
+   "options": [
+    "India, Congo",
+    "India, Australia",
+    "Congo, Australia",
+    "Australia, Congo",
+    "South Korea, Congo",
+    "South Korea, India",
+    "Congo, South Korea",
+    "Congo, India",
+    "South Korea, Australia",
+    "India, South Korea"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-5490",
+   "category": "other",
+   "question": "Which common public relations tactic involves sending journalists on visits to appropriate locations?",
+   "options": [
+    "Publicity stunt",
+    "Promotional days/weeks",
+    "Media release",
+    "Influencer engagement",
+    "Social media campaign",
+    "Media briefing",
+    "Press room",
+    "Press conference",
+    "Sponsorship",
+    "Media tour"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-5832",
+   "category": "other",
+   "question": "Which of the following short-run costs always increases as output increases?",
+   "options": [
+    "Average variable cost",
+    "Marginal revenue",
+    "Average total cost",
+    "Marginal cost",
+    "Total variable cost",
+    "Total overhead cost",
+    "Average revenue cost",
+    "Total fixed cost",
+    "Average fixed cost"
+   ],
+   "answer": "E"
+  },
+  {
+   "id": "mmlu-pro-10855",
+   "category": "philosophy",
+   "question": "Craig says an actually infinite number of things _____.",
+   "options": [
+    "cannot exist",
+    "can be physically observed",
+    "can be counted one by one",
+    "is a concept beyond human comprehension",
+    "only exists in mathematics",
+    "can only exist in theory",
+    "is meaningless",
+    "exists somewhere",
+    "is possible",
+    "is a paradox"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-10885",
+   "category": "philosophy",
+   "question": "Appeal to compassion is",
+   "options": [
+    "an appeal to emotion that argues a conclusion should be made based only on feeling sorry for someone",
+    "an appeal to emotion that argues a conclusion should be made based solely on feeling disgusted by someone",
+    "an appeal to emotion that argues a conclusion should be made based solely on fear",
+    "arguing that an idea should be rejected based only on who originated the idea",
+    "arguing that an idea should be accepted based only on who originated the idea",
+    "an appeal to emotion that argues a conclusion should be made based solely on feeling happy for someone",
+    "an appeal to emotion that argues an action should be taken based only on the need to be loyal to someone",
+    "an appeal to emotion that argues an action should be taken based solely on anger towards someone",
+    "arguing that an idea should be accepted based solely on the popularity of the idea",
+    "an appeal to emotion that argues against a position based only on negative personal feelings toward the position"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-11090",
+   "category": "philosophy",
+   "question": " In Carruther's view, the justification for moral criticism for things that we do (or don't to do) to an animal derives from",
+   "options": [
+    "the animal's lifespan.",
+    "the animal's direct moral standing.",
+    "societal norms and expectations.",
+    "the animal's role in the ecosystem.",
+    "the animal's inability to defend itself.",
+    "the bad qualities of character that our actions evince.",
+    "the animal's intelligence level.",
+    "the animal's capacity for emotion."
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-11167",
+   "category": "philosophy",
+   "question": " Sandel's case against moral engineering can best be considered",
+   "options": [
+    "an expression of the ethics of care.",
+    "a natural law theory approach.",
+    "an application of the ethics of prima facie duty.",
+    "a deontological approach.",
+    "an existentialist approach.",
+    "a virtue ethics approach.",
+    "a relativist approach.",
+    "a Kantian approach.",
+    "a consequentialist approach.",
+    "a utilitarian approach."
+   ],
+   "answer": "F"
+  },
+  {
+   "id": "mmlu-pro-9118",
+   "category": "physics",
+   "question": "When a nucleus of uranium-238 emits an alpha particle, left behind is",
+   "options": [
+    "thorium-238",
+    "lead-210",
+    "radium-230",
+    "thorium-242",
+    "uranium-234",
+    "radium-214",
+    "uranium-236",
+    "thorium-234",
+    "radium-226",
+    "polonium-218"
+   ],
+   "answer": "H"
+  },
+  {
+   "id": "mmlu-pro-9495",
+   "category": "physics",
+   "question": "What is thegyrofrequencyof an electron in a magnetic field of 10 kilogauss, or 1 × 10^4 gauss? (A field of 10 to 15 kilogauss is typical of ordinary laboratory iron core electromagnets.)",
+   "options": [
+    "2.1 × 10^10 cps",
+    "1.2 × 10^10 cps",
+    "1.5 × 10^10 cps",
+    "1.8 × 10^10 cps",
+    "3.5 × 10^10 cps",
+    "5.5 × 10^10 cps",
+    "3.2 × 10^10 cps",
+    "4.0 × 10^10 cps",
+    "2.5 × 10^10 cps",
+    "2.8 × 10^10 cps"
+   ],
+   "answer": "J"
+  },
+  {
+   "id": "mmlu-pro-9691",
+   "category": "physics",
+   "question": "A ballistic rocket is launched at the equator in an easter-ly direction, at an angle of 60° from the horizontal. Its initial speed is V_1 = 6 km/sec as measured with respect to the earth. What will be the great circle distance, around the earth covered by the rocket?",
+   "options": [
+    "8.660 × 10^6 m",
+    "9.80665 m/sec^2",
+    "2.154 × 10^6 m",
+    "6.245 km/sec",
+    "1.732 × 10^6 m",
+    "0.8571",
+    "3.4634 km/sec",
+    "7.238 × 10^6 m",
+    "4.317 × 10^6 m",
+    "5 km/sec"
+   ],
+   "answer": "I"
+  },
+  {
+   "id": "mmlu-pro-10143",
+   "category": "physics",
+   "question": "On either side of a pane of window glass, temperatures are 70°F and 0°F. How fast is heat conducted through such a pane of area 2500 cm^2 if the thickness is 2 mm?",
+   "options": [
+    "729 cal/s",
+    "400 cal/s",
+    "850 cal/s",
+    "500 cal/s",
+    "650 cal/s",
+    "1000 cal/s",
+    "300 cal/s",
+    "900 cal/s",
+    "600 cal/s",
+    "475 cal/s"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-1998",
+   "category": "psychology",
+   "question": "\"\"\"Vicarious liability\"\" is most likely to be a concern when a psychologist is acting in the role of:\"",
+   "options": [
+    "consultant.",
+    "supervisor.",
+    "faculty member.",
+    "researcher.",
+    "clinical director.",
+    "student.",
+    "hospital administrator.",
+    "therapist.",
+    "advocate.",
+    "talk show host."
+   ],
+   "answer": "B"
+  },
+  {
+   "id": "mmlu-pro-2497",
+   "category": "psychology",
+   "question": "What is an experimental control? Why is it important tohave experimentalcontrol?",
+   "options": [
+    "An experimental control is a way of taking into account the possible effect of an extraneous independent variable that is not considered in the hypothesis being tested.",
+    "An experimental control is the process of repeating experiments to ensure accuracy",
+    "An experimental control is an individual or group not exposed to the experimental treatment",
+    "An experimental control is a sample from a larger population used to make generalizations",
+    "An experimental control is the variable that the researcher changes to observe its effects",
+    "An experimental control is a tool for manipulating variables",
+    "An experimental control is a group or condition that remains constant throughout the experiment",
+    "An experimental control is a statistical analysis technique",
+    "An experimental control is a data collection method",
+    "An experimental control is the application of randomization in assigning participants to different conditions"
+   ],
+   "answer": "A"
+  },
+  {
+   "id": "mmlu-pro-2522",
+   "category": "psychology",
+   "question": "The Self-Concept is the individual’s belief about their own attributes. What can happen according to the OVERJUSTIFICATION HYPOTHESIS?",
+   "options": [
+    "to experience an emotion, a person must first experience cognitive interpretation, then physiological arousal",
+    "not rewarding people for an enjoyable activity can undermine their interest",
+    "not rewarding people for an unenjoyable activity can enhance their interest",
+    "when internal cues are clear, people infer by observing their behavior and the situational context",
+    "rewarding people for an unenjoyable activity can enhance their interest",
+    "to experience an emotion, a person must first experience physiological arousal, then a cognitive interpretation of that arousal",
+    "when internal cues are vague, people infer by observing their behavior and the situational context",
+    "rewarding people for an enjoyable activity can undermine their interest",
+    "when external cues are vague, people infer by observing their behavior and the situational context",
+    "rewarding people excessively can enhance their interest"
+   ],
+   "answer": "H"
+  },
+  {
+   "id": "mmlu-pro-2741",
+   "category": "psychology",
+   "question": "What is proactive interference and what does it indicate about how information is classified? What is retroactive interference?",
+   "options": [
+    "Retroactive interference is when past memories hinder the learning of new information, while proactive interference is when new information enhances the recall of old memories.",
+    "Retroactive interference is the effect of new information on the recall of previously learned information",
+    "Proactive interference is the enhancement of future memory retention due to past information, while retroactive interference is the inability to forget unimportant details.",
+    "Retroactive interference is the process of past memories aiding the retention of new information, while proactive interference is when new learning disrupts the recall of future information.",
+    "Proactive interference refers to the inability to recall new information",
+    "Proactive interference is the effect of prior learned items on the retention of information, indicating the importance of classification in retention. Retroactive interference refers to the effect the last items learned have on the retention of information.",
+    "Proactive interference is the inability to learn new information because of existing knowledge, while retroactive interference is the improvement of memory retention due to new information.",
+    "Proactive interference occurs when the memorization of new information is facilitated by previously learned information, and retroactive interference is the process where past information is confused with new learning.",
+    "Proactive interference is the process by which future information is predicted based on past memories, and retroactive interference is when new information overwrites old memories.",
+    "Proactive interference is the effect of future learned items on the retention of information"
+   ],
+   "answer": "F"
+  }
+ ]
+}

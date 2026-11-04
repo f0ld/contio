@@ -374,6 +374,28 @@ contio serve                            # run daemon in foreground
 - [x] Playground: streaming chat with reasoning, tool definitions and a tool-call inspector (send results back), image input, speed stats and the raw request; speech mode with file upload or microphone (recorded to 16 kHz WAV in the browser).
 - [x] Daemon stops its backends on SIGTERM/SIGHUP (was Ctrl-C only); per-backend pid files let the next start stop backends orphaned by a crash or `kill -9`.
 
+**M3: in progress** (branch `m3-bench`):
+- [x] `contio-bench` performance harness through the daemon's own OpenAI endpoint (the path clients use): prefill and decode tok/s per prompt length (prompts calibrated to the model's tokenizer with two measurements, unique nonce per prompt against prompt caches, llama.cpp `timings` preferred over client timing), TTFT, N parallel requests; SoC power from the `PPT` sensor at 10 Hz → watts and J/token; idle power; load time; VRAM/system pool growth and backend RSS (mapped weights don't show as "used" on CPU); estimator prediction stored next to it.
+- [x] Presets quick (512 tokens, 1 run) / standard (512 + 4k, 3 runs, 4 parallel) / full (+16k, 5 runs). Run conditions recorded: power profile, AC/battery, backend + path, other loaded models.
+- [x] Runs as a background job (one at a time): unloads other idle models (optional), reloads the model for load time and memory, holds a lease so it isn't evicted.
+- [x] Results in SQLite (`bench.db`: runs + headline metrics), list/detail/delete API, CSV/JSON export. CLI `contio bench run|results|show|export|rm`.
+- [x] Tool-calling suite (`registry/bench/tool_calls.json`, 23 cases written for contio): simple, choose among 11 tools, parallel, multi-turn (results, chained lookups, error results), no-call when no tool fits, JSON schema output. Type-strict argument checks; pass rate per category; **agent-ready** = ≥ 90% overall and ≥ 75% in every category.
+- [x] GUI Benchmarks page: run form, bar charts per metric (latest run per model), all runs with detail (per prompt length / per case with first failure), CSV/JSON export.
+- [ ] Coding (podman sandbox), reasoning/math, knowledge subsets; embedding, reranker and Whisper (WER) quality
+- [ ] Speed-vs-quality scatter, quant-ladder and device comparison views; arena with Elo
+- [ ] Power-profile switching for a run (record-only so far); feeding measured speed back into the catalog's fit estimate
+
+First measurements (Framework 13, performance profile, AC, standard preset):
+
+| Model | Device | Decode tok/s | Prefill 512 / 4k tok/s | TTFT 512 | J/token | Load | Memory (est.) |
+|---|---|---|---|---|---|---|---|
+| Qwen3.6 35B-A3B Q4_K_M | GPU | 23.0 | 497 / 509 | 1.12 s | 1.55 | 5.1 s | 21.2 GiB (23.2) |
+| Qwen3.5 4B UD-Q4_K_XL | GPU | 22.5 | 655 / 641 | 0.84 s | 1.82 | 1.2 s | 4.1 GiB (5.1) |
+| Qwen3.5 4B UD-Q4_K_XL | CPU | 18.5 | 194 / 163 | 2.70 s | 2.56 | 1.5 s | 6.9 GiB RSS (4.1) |
+| Qwen3 4B (FLM) | NPU | 19.5 | 336 / 552 | 1.53 s | 1.83 | 3.1 s | 8.3 GiB RSS |
+
+Finding: the CPU estimate is too low (llama.cpp's CPU RSS is 1.7× the estimate); GPU estimates are within 10–25% on the safe side.
+
 **Known gaps / M3 candidates**
 - whisper.cpp has no prebuilt Linux binaries upstream; Podman images exist but only tagged by commit (`main-vulkan-<sha>`), so only the source install is offered. large-v3-turbo doesn't translate (model limitation).
 - NPU models have no memory estimate yet (FLM's `footprint` is shown in the catalog but not used for pool budgeting).

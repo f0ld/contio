@@ -1,0 +1,814 @@
+{
+  "about": "contio tool-calling suite (spec §8.2). Argument matchers: a value (strings compare case-insensitively), a list of accepted values, or {\"contains\": \"text\"}. Written for contio; BFCL-style categories.",
+  "tools": {
+    "get_weather": {
+      "description": "Current weather for a city",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "City name"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "celsius",
+              "fahrenheit"
+            ],
+            "description": "Temperature unit, default celsius"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      }
+    },
+    "get_stock_price": {
+      "description": "Latest price of a stock",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Ticker symbol, e.g. AAPL"
+          }
+        },
+        "required": [
+          "symbol"
+        ]
+      }
+    },
+    "convert_currency": {
+      "description": "Convert an amount between currencies",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "from": {
+            "type": "string",
+            "description": "ISO 4217 code, e.g. EUR"
+          },
+          "to": {
+            "type": "string",
+            "description": "ISO 4217 code, e.g. USD"
+          }
+        },
+        "required": [
+          "amount",
+          "from",
+          "to"
+        ]
+      }
+    },
+    "create_calendar_event": {
+      "description": "Add an event to the user's calendar",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "time": {
+            "type": "string",
+            "description": "HH:MM, 24-hour"
+          },
+          "duration_minutes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "title",
+          "date",
+          "time",
+          "duration_minutes"
+        ]
+      }
+    },
+    "toggle_lights": {
+      "description": "Switch the lights in a room on or off",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "room": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "room",
+          "on"
+        ]
+      }
+    },
+    "send_email": {
+      "description": "Send an email",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "Recipient address"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ]
+      }
+    },
+    "search_files": {
+      "description": "Search the user's documents",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "file_type": {
+            "type": "string",
+            "enum": [
+              "pdf",
+              "docx",
+              "txt",
+              "any"
+            ]
+          },
+          "max_results": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "file_type"
+        ]
+      }
+    },
+    "set_thermostat": {
+      "description": "Set the target temperature of a room in degrees Celsius",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "room": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "room",
+          "temperature"
+        ]
+      }
+    },
+    "book_flight": {
+      "description": "Book a flight",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "description": "Departure city"
+          },
+          "destination": {
+            "type": "string",
+            "description": "Arrival city"
+          },
+          "date": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "passengers": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "origin",
+          "destination",
+          "date",
+          "passengers"
+        ]
+      }
+    },
+    "get_user": {
+      "description": "Look up a customer by email address",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      }
+    },
+    "get_orders": {
+      "description": "List a customer's orders",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "shipped",
+              "all"
+            ]
+          }
+        },
+        "required": [
+          "user_id",
+          "status"
+        ]
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "simple-weather",
+      "category": "simple",
+      "tools": [
+        "get_weather"
+      ],
+      "prompt": "What's the weather like in Berlin right now?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_weather",
+            "args": {
+              "city": "Berlin"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-weather-unit",
+      "category": "simple",
+      "tools": [
+        "get_weather"
+      ],
+      "prompt": "How warm is it in Austin, Texas? Give me the temperature in Fahrenheit.",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_weather",
+            "args": {
+              "city": {
+                "contains": "Austin"
+              },
+              "unit": "fahrenheit"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-stock",
+      "category": "simple",
+      "tools": [
+        "get_stock_price"
+      ],
+      "prompt": "What is Apple (AAPL) trading at?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_stock_price",
+            "args": {
+              "symbol": "AAPL"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-currency",
+      "category": "simple",
+      "tools": [
+        "convert_currency"
+      ],
+      "prompt": "Convert 250 euros to US dollars.",
+      "expect": {
+        "calls": [
+          {
+            "name": "convert_currency",
+            "args": {
+              "amount": 250,
+              "from": "EUR",
+              "to": "USD"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-calendar",
+      "category": "simple",
+      "tools": [
+        "create_calendar_event"
+      ],
+      "prompt": "Put a 45 minute dentist appointment in my calendar on 2026-12-03 at 14:30.",
+      "expect": {
+        "calls": [
+          {
+            "name": "create_calendar_event",
+            "args": {
+              "title": {
+                "contains": "dentist"
+              },
+              "date": "2026-12-03",
+              "time": "14:30",
+              "duration_minutes": 45
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "simple-boolean",
+      "category": "simple",
+      "tools": [
+        "toggle_lights"
+      ],
+      "prompt": "Turn off the lights in the kitchen.",
+      "expect": {
+        "calls": [
+          {
+            "name": "toggle_lights",
+            "args": {
+              "room": "kitchen",
+              "on": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "multiple-email",
+      "category": "multiple",
+      "prompt": "Email bob@example.com with the subject 'Meeting moved' and tell him the meeting is now on Friday.",
+      "expect": {
+        "calls": [
+          {
+            "name": "send_email",
+            "args": {
+              "to": "bob@example.com",
+              "subject": {
+                "contains": "meeting"
+              },
+              "body": {
+                "contains": "friday"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "multiple-files",
+      "category": "multiple",
+      "prompt": "Find my PDF documents about tax returns.",
+      "expect": {
+        "calls": [
+          {
+            "name": "search_files",
+            "args": {
+              "query": {
+                "contains": "tax"
+              },
+              "file_type": "pdf"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "multiple-thermostat",
+      "category": "multiple",
+      "prompt": "Set the living room to 21.5 degrees.",
+      "expect": {
+        "calls": [
+          {
+            "name": "set_thermostat",
+            "args": {
+              "room": {
+                "contains": "living"
+              },
+              "temperature": 21.5
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "multiple-flight",
+      "category": "multiple",
+      "prompt": "Book a flight from Hamburg to Lisbon on 2027-03-14 for 2 people.",
+      "expect": {
+        "calls": [
+          {
+            "name": "book_flight",
+            "args": {
+              "origin": "Hamburg",
+              "destination": "Lisbon",
+              "date": "2027-03-14",
+              "passengers": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "parallel-weather",
+      "category": "parallel",
+      "tools": [
+        "get_weather",
+        "get_stock_price"
+      ],
+      "prompt": "What's the weather in Paris, Rome and Madrid?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_weather",
+            "args": {
+              "city": "Paris"
+            }
+          },
+          {
+            "name": "get_weather",
+            "args": {
+              "city": "Rome"
+            }
+          },
+          {
+            "name": "get_weather",
+            "args": {
+              "city": "Madrid"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "parallel-stocks",
+      "category": "parallel",
+      "prompt": "Get me the current stock prices of NVDA and AMD.",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_stock_price",
+            "args": {
+              "symbol": "NVDA"
+            }
+          },
+          {
+            "name": "get_stock_price",
+            "args": {
+              "symbol": "AMD"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "parallel-lights",
+      "category": "parallel",
+      "prompt": "Turn on the lights in the bedroom and in the hallway.",
+      "expect": {
+        "calls": [
+          {
+            "name": "toggle_lights",
+            "args": {
+              "room": "bedroom",
+              "on": true
+            }
+          },
+          {
+            "name": "toggle_lights",
+            "args": {
+              "room": "hallway",
+              "on": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "parallel-currency",
+      "category": "parallel",
+      "tools": [
+        "convert_currency"
+      ],
+      "prompt": "Convert 100 USD to EUR and also 100 USD to JPY.",
+      "expect": {
+        "calls": [
+          {
+            "name": "convert_currency",
+            "args": {
+              "amount": 100,
+              "from": "USD",
+              "to": "EUR"
+            }
+          },
+          {
+            "name": "convert_currency",
+            "args": {
+              "amount": 100,
+              "from": "USD",
+              "to": "JPY"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "multiturn-result",
+      "category": "multi_turn",
+      "tools": [
+        "get_weather"
+      ],
+      "prompt": "Should I take an umbrella in Karlsruhe today?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_weather",
+            "args": {
+              "city": "Karlsruhe"
+            }
+          }
+        ],
+        "then": {
+          "results": [
+            {
+              "temp_c": 14,
+              "conditions": "heavy rain",
+              "rain_probability": 0.9
+            }
+          ],
+          "expect": {
+            "no_call": true,
+            "answer_contains": [
+              [
+                "yes",
+                "umbrella",
+                "rain"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "multiturn-chain",
+      "category": "multi_turn",
+      "prompt": "Which orders of anna@example.com are still open?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_user",
+            "args": {
+              "email": "anna@example.com"
+            }
+          }
+        ],
+        "then": {
+          "results": [
+            {
+              "id": 4711,
+              "name": "Anna Berg"
+            }
+          ],
+          "expect": {
+            "calls": [
+              {
+                "name": "get_orders",
+                "args": {
+                  "user_id": 4711,
+                  "status": "open"
+                }
+              }
+            ],
+            "then": {
+              "results": [
+                [
+                  {
+                    "order": "A-1042",
+                    "item": "desk lamp",
+                    "status": "open"
+                  }
+                ]
+              ],
+              "expect": {
+                "no_call": true,
+                "answer_contains": [
+                  "A-1042"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "multiturn-number",
+      "category": "multi_turn",
+      "tools": [
+        "get_stock_price",
+        "convert_currency"
+      ],
+      "prompt": "What's the current Microsoft (MSFT) share price?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_stock_price",
+            "args": {
+              "symbol": "MSFT"
+            }
+          }
+        ],
+        "then": {
+          "results": [
+            {
+              "symbol": "MSFT",
+              "price": 412.37,
+              "currency": "USD"
+            }
+          ],
+          "expect": {
+            "no_call": true,
+            "answer_contains": [
+              "412.37"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "multiturn-error",
+      "category": "multi_turn",
+      "tools": [
+        "get_weather"
+      ],
+      "prompt": "What's the weather in Oslo right now?",
+      "expect": {
+        "calls": [
+          {
+            "name": "get_weather",
+            "args": {
+              "city": "Oslo"
+            }
+          }
+        ],
+        "then": {
+          "results": [
+            {
+              "error": "weather service temporarily unavailable"
+            }
+          ],
+          "expect": {
+            "no_call": true,
+            "answer_contains": [
+              [
+                "unavailable",
+                "not available",
+                "couldn't",
+                "could not",
+                "unable",
+                "error",
+                "try again",
+                "later"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "irrelevant-knowledge",
+      "category": "irrelevance",
+      "tools": [
+        "get_weather",
+        "get_stock_price"
+      ],
+      "prompt": "What is the capital of Australia?",
+      "expect": {
+        "no_call": true,
+        "answer_contains": [
+          "Canberra"
+        ]
+      }
+    },
+    {
+      "id": "irrelevant-chat",
+      "category": "irrelevance",
+      "prompt": "Tell me a very short joke about cats.",
+      "expect": {
+        "no_call": true
+      }
+    },
+    {
+      "id": "irrelevant-missing-tool",
+      "category": "irrelevance",
+      "tools": [
+        "get_weather",
+        "send_email"
+      ],
+      "prompt": "Order me a large pizza from the place around the corner.",
+      "expect": {
+        "no_call": true
+      }
+    },
+    {
+      "id": "json-extract",
+      "category": "json",
+      "tools": [],
+      "prompt": "Extract the person from this sentence: 'Maria is 34 years old and lives in Porto.'",
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "person",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "age": {
+                "type": "integer"
+              },
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "age",
+              "city"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "expect": {
+        "json": {
+          "name": "Maria",
+          "age": 34,
+          "city": "Porto"
+        }
+      }
+    },
+    {
+      "id": "json-list",
+      "category": "json",
+      "tools": [],
+      "prompt": "List the three primary colors of light.",
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "colors",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "colors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "required": [
+              "colors"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "expect": {
+        "json": {}
+      }
+    }
+  ]
+}

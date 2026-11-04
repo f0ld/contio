@@ -171,6 +171,11 @@ enum BenchAction {
         /// quick (~1 min), standard (adds 4k prompts, 3 runs, 4 parallel), full (adds 16k, 5 runs)
         #[arg(long, short, default_value = "quick", value_parser = ["quick", "standard", "full"])]
         preset: String,
+        /// perf (speed, energy, memory), tools (tool calling, JSON; agent-ready badge),
+        /// reasoning (GSM8K), knowledge (MMLU-Pro), coding (HumanEval, runs code in podman)
+        #[arg(long, short, value_delimiter = ',', default_value = "perf",
+              value_parser = ["perf", "tools", "reasoning", "knowledge", "coding"])]
+        suite: Vec<String>,
         /// Keep other loaded models running (they share memory bandwidth).
         #[arg(long)]
         shared: bool,
@@ -408,8 +413,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             eprintln!("\x1b[2m{:.1}s\x1b[0m", started.elapsed().as_secs_f64());
         }
         Command::Bench { action } => match action {
-            BenchAction::Run { models, preset, shared, no_reload, detach } => {
-                let body = json!({ "models": models, "preset": preset, "exclusive": !shared, "reload": !no_reload });
+            BenchAction::Run { models, preset, suite, shared, no_reload, detach } => {
+                let body = json!({
+                    "models": models, "preset": preset, "suites": suite, "exclusive": !shared, "reload": !no_reload,
+                });
                 let r = client.post("/api/bench", &body).await?;
                 if let Some(result) = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await? {
                     for e in result["errors"].as_array().into_iter().flatten() {
@@ -425,7 +432,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             BenchAction::Results { model, limit } => {
                 let q = model.map(|m| format!("&model={}", urlencode(&m))).unwrap_or_default();
-                let raw = client.get(&format!("/api/bench/runs?suite=perf&limit={limit}{q}")).await?;
+                let raw = client.get(&format!("/api/bench/runs?limit={limit}{q}")).await?;
                 if cli.json {
                     println!("{raw}");
                 } else {

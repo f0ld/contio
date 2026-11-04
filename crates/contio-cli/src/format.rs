@@ -182,30 +182,110 @@ fn mem_used(r: &Value) -> Option<f64> {
     (v > 0.0).then_some(v)
 }
 
+/// Perf and tool-calling runs, one table each.
 pub fn bench_runs(runs: &[Value]) -> String {
     if runs.is_empty() {
         return "no benchmark runs yet: try `contio bench run <model>`".into();
     }
+    let of = |s: &str| -> Vec<&Value> { runs.iter().filter(|r| r["suite"] == s).collect() };
+    let quality: Vec<&Value> =
+        runs.iter().filter(|r| matches!(r["suite"].as_str(), Some("reasoning" | "knowledge" | "coding"))).collect();
+    let mut parts = Vec::new();
+    if !of("perf").is_empty() {
+        parts.push(perf_runs(&of("perf")));
+    }
+    if !of("tools").is_empty() {
+        parts.push(tool_runs(&of("tools")));
+    }
+    if !quality.is_empty() {
+        parts.push(quality_runs(&quality));
+    }
+    parts.join("\n\n")
+}
+
+fn quality_runs(runs: &[&Value]) -> String {
+    let rows: Vec<[String; 7]> = runs
+        .iter()
+        .map(|r| {
+            let suite = r["suite"].as_str().unwrap_or_default();
+            let m = &r["metrics"];
+            [
+                r["id"].to_string(),
+                r["model"].as_str().unwrap_or_default().to_owned(),
+                device_quant(r),
+                r["preset"].as_str().unwrap_or_default().to_owned(),
+                suite.to_owned(),
+                m[format!("{suite}_pass_rate")].as_f64().map_or(status_note(r), |v| format!("{:.0}%", v * 100.0)),
+                num(m[format!("{suite}_tokens_per_item")].as_f64(), 0),
+            ]
+        })
+        .collect();
+    table(&["ID", "MODEL", "DEVICE", "PRESET", "SUITE", "PASS", "TOKENS/ITEM"], &rows)
+}
+
+fn device_quant(r: &Value) -> String {
+    format!(
+        "{} {}",
+        r["target"]["device"].as_str().unwrap_or("?"),
+        r["target"]["origin"]["quant"].as_str().filter(|q| *q != "none").unwrap_or("")
+    )
+    .trim()
+    .to_owned()
+}
+
+fn status_note(r: &Value) -> String {
+    match r["status"].as_str() {
+        Some("done") => String::new(),
+        Some(s) => s.to_owned(),
+        None => "?".into(),
+    }
+}
+
+fn tool_runs(runs: &[&Value]) -> String {
+    let pct = |v: Option<f64>| v.map_or("-".into(), |x| format!("{:.0}%", x * 100.0));
     let rows: Vec<[String; 12]> = runs
         .iter()
         .map(|r| {
             let m = &r["metrics"];
             let f = |k: &str| m[k].as_f64();
-            let status = match r["status"].as_str() {
-                Some("done") => String::new(),
-                Some(s) => s.to_owned(),
-                None => "?".into(),
+            let ready = match f("agent_ready") {
+                Some(1.0) => "\x1b[32magent-ready\x1b[0m".to_owned(),
+                Some(_) => "no".to_owned(),
+                None => status_note(r),
             };
             [
                 r["id"].to_string(),
                 r["model"].as_str().unwrap_or_default().to_owned(),
-                format!(
-                    "{} {}",
-                    r["target"]["device"].as_str().unwrap_or("?"),
-                    r["target"]["origin"]["quant"].as_str().filter(|q| *q != "none").unwrap_or("")
-                )
-                .trim()
-                .to_owned(),
+                device_quant(r),
+                r["preset"].as_str().unwrap_or_default().to_owned(),
+                pct(f("tools_pass_rate")),
+                pct(f("tools_simple")),
+                pct(f("tools_multiple")),
+                pct(f("tools_parallel")),
+                pct(f("tools_multi_turn")),
+                pct(f("tools_irrelevance")),
+                pct(f("tools_json")),
+                ready,
+            ]
+        })
+        .collect();
+    table(
+        &["ID", "MODEL", "DEVICE", "PRESET", "PASS", "SIMPLE", "CHOOSE", "PARALLEL", "MULTI-TURN", "NO-CALL", "JSON", "AGENT"],
+        &rows,
+    )
+}
+
+fn perf_runs(runs: &[&Value]) -> String {
+    let rows: Vec<[String; 12]> = runs
+        .iter()
+        .map(|r| {
+            let m = &r["metrics"];
+            let f = |k: &str| m[k].as_f64();
+            let status = status_note(r);
+            [
+                r["id"].to_string(),
+                r["model"].as_str().unwrap_or_default().to_owned(),
+                device_quant(r),
                 r["preset"].as_str().unwrap_or_default().to_owned(),
                 num(f("tg_tps"), 1),
                 num(f("pp512_tps"), 0),
@@ -259,6 +339,12 @@ pub fn bench_detail(r: &Value) -> String {
         let _ = writeln!(s, "\x1b[31m{e}\x1b[0m");
     }
     let rep = &r["report"];
+    if r["suite"] == "tools" {
+        return tool_detail(s, rep);
+    }
+    if rep["items"].is_array() {
+        return quality_detail(s, rep);
+    }
     let load = &rep["load"];
     let mut facts = Vec::new();
     if let Some(l) = load["load_s"].as_f64() {
@@ -307,6 +393,74 @@ pub fn bench_detail(r: &Value) -> String {
             num(cc["per_request_decode_tps"].as_f64(), 1)
         );
     }
+    s.trim_end().to_owned()
+}
+
+fn quality_detail(mut s: String, rep: &Value) -> String {
+    let rate = rep["pass_rate"].as_f64().unwrap_or(0.0);
+    let cats: Vec<String> = rep["categories"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, v)| format!("{k} {:.0}%", v.as_f64().unwrap_or(0.0) * 100.0))
+        .collect();
+    let _ = writeln!(s, "\x1b[1m{:.0}% passed\x1b[0m · {} runs per item{}", rate * 100.0, rep["reps"],
+        if rep["truncated"].as_u64().unwrap_or(0) > 0 { format!(" · {} hit the token limit", rep["truncated"]) } else { String::new() });
+    if !cats.is_empty() {
+        let _ = writeln!(s, "\x1b[2m{}\x1b[0m", cats.join(" · "));
+    }
+    let rows: Vec<[String; 4]> = rep["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|i| i["passed"] != i["runs"])
+        .map(|i| {
+            let why = i["failures"][0].as_str().unwrap_or_default();
+            [
+                i["id"].as_str().unwrap_or_default().to_owned(),
+                format!("{}/{}", i["passed"], i["runs"]),
+                num(i["mean_s"].as_f64(), 1),
+                why.chars().take(90).collect(),
+            ]
+        })
+        .collect();
+    if !rows.is_empty() {
+        let _ = writeln!(s, "\nfailed:\n{}", table(&["ITEM", "PASS", "SEC", "FIRST FAILURE"], &rows));
+    }
+    s.trim_end().to_owned()
+}
+
+fn tool_detail(mut s: String, rep: &Value) -> String {
+    if let Some(rate) = rep["pass_rate"].as_f64() {
+        let ready = if rep["agent_ready"] == true { "agent-ready" } else { "not agent-ready" };
+        let cats: Vec<String> = rep["categories"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| format!("{k} {:.0}%", v.as_f64().unwrap_or(0.0) * 100.0))
+            .collect();
+        let _ = writeln!(s, "\x1b[1m{:.0}% passed\x1b[0m · {ready} · {}", rate * 100.0, cats.join(" · "));
+    }
+    let rows: Vec<[String; 5]> = rep["cases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let fails: Vec<&str> = c["failures"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            let mut why = fails.first().copied().unwrap_or_default().to_owned();
+            if why.chars().count() > 90 {
+                why = format!("{}…", why.chars().take(90).collect::<String>());
+            }
+            [
+                c["id"].as_str().unwrap_or_default().to_owned(),
+                format!("{}/{}", c["passed"], c["runs"]),
+                num(c["mean_s"].as_f64(), 1),
+                c["completion_tokens"].to_string(),
+                why,
+            ]
+        })
+        .collect();
+    let _ = writeln!(s, "\n{}", table(&["CASE", "PASS", "SEC", "TOKENS", "FIRST FAILURE"], &rows));
     s.trim_end().to_owned()
 }
 

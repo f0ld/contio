@@ -7,7 +7,9 @@
 
 pub mod monitor;
 pub mod perf;
+pub mod quality;
 pub mod store;
+pub mod tools;
 
 use std::collections::BTreeMap;
 
@@ -30,7 +32,54 @@ pub enum Preset {
     Full,
 }
 
+/// What to measure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SuiteKind {
+    /// Speed, energy, memory.
+    Perf,
+    /// Tool calling and JSON output; gates the agent-ready badge.
+    Tools,
+    /// Math word problems (GSM8K subset).
+    Reasoning,
+    /// Multiple choice across 14 subjects (MMLU-Pro subset).
+    Knowledge,
+    /// Python functions checked by unit tests in a sandbox (HumanEval subset).
+    Coding,
+}
+
+impl SuiteKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Perf => "perf",
+            Self::Tools => "tools",
+            Self::Reasoning => "reasoning",
+            Self::Knowledge => "knowledge",
+            Self::Coding => "coding",
+        }
+    }
+
+    pub fn quality(self) -> Option<quality::QualitySuite> {
+        match self {
+            Self::Reasoning => Some(quality::QualitySuite::Reasoning),
+            Self::Knowledge => Some(quality::QualitySuite::Knowledge),
+            Self::Coding => Some(quality::QualitySuite::Coding),
+            Self::Perf | Self::Tools => None,
+        }
+    }
+}
+
 impl Preset {
+    /// Repetitions per quality item (GPU decoding isn't deterministic even at
+    /// temperature 0, M0), reported as a pass rate.
+    pub fn quality_reps(self) -> u32 {
+        match self {
+            Self::Quick => 1,
+            Self::Standard => 3,
+            Self::Full => 5,
+        }
+    }
+
     pub fn perf_options(self) -> PerfOptions {
         match self {
             Self::Quick => PerfOptions { prompt_tokens: vec![512], gen_tokens: 64, reps: 1, concurrency: 0 },

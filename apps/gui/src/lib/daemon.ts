@@ -4,6 +4,8 @@ import type {
   Alias,
   BackendId,
   BackendsInfo,
+  BenchRequest,
+  BenchRun,
   CatalogOverview,
   HardwareInfo,
   InstallMethod,
@@ -156,3 +158,16 @@ export const errorText = (e: unknown) => (e instanceof Error ? e.message : Strin
 export function profileLabel(p: HardwareInfo["power"]["profile"]): string {
   return typeof p === "string" ? p : `unknown (${p.unknown})`;
 }
+
+// --- benchmarks ---
+
+export const fetchBenchRuns = (model?: string) =>
+  request<BenchRun[]>(`/api/bench/runs?limit=500${model ? `&model=${enc(model)}` : ""}`);
+
+export const fetchBenchRun = (id: number) => request<BenchRun>(`/api/bench/runs/${id}`);
+
+export const startBench = (req: BenchRequest) => send<{ job_id: number }>("/api/bench", "POST", req);
+
+export const deleteBenchRun = (id: number) => send<{ deleted: number }>(`/api/bench/runs/${id}`, "DELETE");
+
+export const benchExportUrl = (format: "csv" | "json") => `${DAEMON_URL}/api/bench/export?format=${format}`;

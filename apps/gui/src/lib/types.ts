@@ -286,3 +286,70 @@ export interface PreflightResult {
   install_hint: string | null;
   preflight: { missing_packages: string[]; missing_tools: string[]; notes: string[] };
 }
+
+// Mirrors crates/contio-bench (store::Run) and contiod/src/bench_api.rs.
+export type BenchSuite = "perf" | "tools";
+export type BenchPreset = "quick" | "standard" | "full";
+
+export interface BenchRun {
+  id: number;
+  suite: BenchSuite;
+  model: string;
+  preset: BenchPreset;
+  started_at: number;
+  finished_at: number | null;
+  status: "running" | "done" | "failed" | "cancelled";
+  error: string | null;
+  target: {
+    device?: DeviceKind;
+    backend?: string;
+    context?: number | null;
+    origin?: ModelOrigin | null;
+  };
+  conditions: {
+    power_profile?: string | null;
+    on_ac?: boolean | null;
+    battery_percent?: number | null;
+    backend?: string | null;
+    other_models?: string[];
+  };
+  /** Full report (detail endpoint only). */
+  report: unknown;
+  metrics: Record<string, number>;
+  job_id: number | null;
+}
+
+export interface BenchRequest {
+  models: string[];
+  preset: BenchPreset;
+  suites: BenchSuite[];
+  exclusive: boolean;
+  reload: boolean;
+}
+
+export interface PerfSummary {
+  prompt_tokens: number;
+  ttft_s: number | null;
+  prefill_tps: number | null;
+  decode_tps: number | null;
+  avg_watts: number | null;
+  joules_per_token: number | null;
+}
+
+export interface PerfReportView {
+  load: { load_s: number | null; estimated_bytes: number | null; peak_rss_bytes: number | null };
+  perf: {
+    idle_watts: number | null;
+    prompts: { target_tokens: number; summary: PerfSummary; samples: unknown[] }[];
+    skipped: number[];
+    concurrency: { requests: number; aggregate_tps: number; per_request_decode_tps: number | null } | null;
+  };
+}
+
+export interface ToolsReportView {
+  pass_rate: number;
+  agent_ready: boolean;
+  categories: Record<string, number>;
+  reps: number;
+  cases: { id: string; category: string; runs: number; passed: number; failures: string[]; mean_s: number }[];
+}

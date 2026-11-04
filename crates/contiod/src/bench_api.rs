@@ -13,7 +13,8 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use contio_bench::store::{Filter, NewRun, Run, RunStatus};
-use contio_bench::{Conditions, LoadReport, Monitor, PerfRun, Preset, Progress, Target};
+use contio_bench::tools::Suite;
+use contio_bench::{Conditions, LoadReport, Monitor, PerfRun, Preset, Progress, SuiteKind, Target};
 use contio_core::model::{ModelKind, ModelState};
 use contio_install::jobs::JobCtx;
 use serde::Deserialize;
@@ -32,6 +33,9 @@ pub struct BenchRequest {
     pub models: Vec<String>,
     #[serde(default)]
     pub preset: Preset,
+    /// Default: `["perf"]`.
+    #[serde(default = "default_suites")]
+    pub suites: Vec<SuiteKind>,
     /// Unload other (unpinned, idle) models first so they don't share memory
     /// bandwidth. Default: true.
     #[serde(default = "yes")]
@@ -45,20 +49,25 @@ fn yes() -> bool {
     true
 }
 
+fn default_suites() -> Vec<SuiteKind> {
+    vec![SuiteKind::Perf]
+}
+
 pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>) -> Response {
-    if req.models.is_empty() {
-        return bad_request("`models` is empty");
+    if req.models.is_empty() || req.suites.is_empty() {
+        return bad_request("`models` and `suites` must not be empty");
     }
     let mut ids = Vec::new();
     for name in &req.models {
         let (id, _) = crate::gateway::resolve(&state, name);
         match state.manager.profile(&id) {
             Ok(p) if p.kind == ModelKind::Chat => ids.push(id),
-            Ok(p) => return bad_request(&format!("`{name}` is a {:?} model; speed benchmarks cover chat models", p.kind)),
+            Ok(p) => return bad_request(&format!("`{name}` is a {:?} model; benchmarks cover chat models so far", p.kind)),
             Err(e) => return crate::gateway::backend_error(&e),
         }
     }
-    let title = format!("benchmark {} ({})", ids.join(", "), json!(req.preset).as_str().unwrap_or_default());
+    let suites: Vec<&str> = req.suites.iter().map(|s| s.name()).collect();
+    let title = format!("benchmark {} ({}, {})", ids.join(", "), suites.join("+"), json!(req.preset).as_str().unwrap_or_default());
     let st = state.clone();
     // one benchmark at a time: parallel runs would measure each other
     let job = state.installer.jobs.spawn("bench", &title, Some("bench".into()), move |ctx| async move {
@@ -67,7 +76,9 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
         for (i, id) in ids.iter().enumerate() {
             ctx.check_cancelled()?;
             let sub = if n > 1 { ctx.with_prefix(&format!("[{}/{n} {id}] ", i + 1)) } else { ctx.clone() };
-            runs.push(run_perf(&st, id, &req, &sub).await);
+            for &suite in &req.suites {
+                runs.push(run_suite(&st, id, suite, &req, &sub).await);
+            }
         }
         let failed: Vec<String> = runs.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
         let ids: Vec<i64> = runs.iter().filter_map(|r| r.as_ref().ok().copied()).collect();
@@ -91,12 +102,13 @@ impl Progress for JobProgress<'_> {
     }
 }
 
-/// One performance run; returns the run id (the run is stored either way).
-async fn run_perf(state: &AppState, id: &str, req: &BenchRequest, ctx: &JobCtx) -> Result<i64, String> {
+/// One suite on one model; returns the run id (the run is stored either way).
+async fn run_suite(state: &AppState, id: &str, suite: SuiteKind, req: &BenchRequest, ctx: &JobCtx) -> Result<i64, String> {
     let profile = state.manager.profile(id).map_err(|e| e.to_string())?;
     let (backend, backend_desc) = state.manager.backend_description(id).map_err(|e| e.to_string())?;
 
-    if req.exclusive {
+    // other models only matter for speed and energy
+    if req.exclusive && suite == SuiteKind::Perf {
         for s in state.manager.statuses() {
             let loaded = matches!(s.state, ModelState::Ready { .. } | ModelState::Loading);
             if s.id != id && loaded && !s.pinned && s.in_flight == 0 {
@@ -131,7 +143,7 @@ async fn run_perf(state: &AppState, id: &str, req: &BenchRequest, ctx: &JobCtx) 
     let run_id = state
         .bench
         .start(&NewRun {
-            suite: "perf",
+            suite: suite.name(),
             model: id,
             preset: &preset,
             target: &target_info,
@@ -139,14 +151,57 @@ async fn run_perf(state: &AppState, id: &str, req: &BenchRequest, ctx: &JobCtx) 
             job_id: Some(ctx.id()),
         })?;
 
-    let result = measure(state, id, &profile, &backend, req, ctx).await;
+    let result = match suite {
+        SuiteKind::Perf => measure(state, id, &profile, &backend, req, ctx)
+            .await
+            .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
+        SuiteKind::Tools => tool_calls(state, id, req, ctx)
+            .await
+            .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
+        SuiteKind::Reasoning | SuiteKind::Knowledge | SuiteKind::Coding => quality(state, id, suite, req, ctx)
+            .await
+            .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
+    };
     let (status, error, report, metrics) = match &result {
-        Ok(r) => (RunStatus::Done, None, serde_json::to_value(r).unwrap_or_default(), r.metrics()),
+        Ok((report, metrics)) => (RunStatus::Done, None, report.clone(), metrics.clone()),
         Err(e) if ctx.is_cancelled() => (RunStatus::Cancelled, Some(e.as_str()), Value::Null, Default::default()),
         Err(e) => (RunStatus::Failed, Some(e.as_str()), Value::Null, Default::default()),
     };
     state.bench.finish(run_id, status, error, &report, &metrics)?;
     result.map(|_| run_id).map_err(|e| format!("{id}: {e}"))
+}
+
+async fn tool_calls(
+    state: &AppState,
+    id: &str,
+    req: &BenchRequest,
+    ctx: &JobCtx,
+) -> Result<contio_bench::tools::ToolsReport, String> {
+    ctx.step("loading");
+    // held for the whole run: the model can't be evicted midway
+    let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
+    let report = contio_bench::tools::run(&state.http, &target, &Suite::builtin(), req.preset.quality_reps(), &JobProgress(ctx)).await;
+    drop(lease);
+    report
+}
+
+async fn quality(
+    state: &AppState,
+    id: &str,
+    suite: SuiteKind,
+    req: &BenchRequest,
+    ctx: &JobCtx,
+) -> Result<contio_bench::quality::QualityReport, String> {
+    let which = suite.quality().expect("a quality suite");
+    ctx.step("loading");
+    let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
+    let work = state.installer.data_dir.join("cache/sandbox");
+    let report =
+        contio_bench::quality::run(&state.http, &target, which, req.preset, &work, &JobProgress(ctx)).await;
+    drop(lease);
+    report
 }
 
 async fn measure(
