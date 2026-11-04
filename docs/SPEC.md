@@ -397,6 +397,8 @@ contio serve                            # run daemon in foreground
 Findings so far:
 - llama.cpp rejects requests that combine `tools` with a `response_format` schema ("failed to parse grammar"); FastFlowLM accepts them. The gateway could drop the schema grammar or validate afterwards (M5).
 - Reasoning (quick, 4096 tokens): Qwen3.5 4B 65%; every failure was a cut-off, every finished answer was right. The model reaches the answer and then keeps second-guessing it (not a loop). Qwen's recommended sampling (temp 0.6, top-k 20, presence penalty 1.5) gave the same score, so the budget, not sampling, decides quick scores; standard uses 8192 tokens.
+- Coding (quick, 4096 tokens): Qwen3.5 4B 55%; all 9 failures were cut-offs, all 11 finished programs passed in the sandbox. Same pattern as reasoning: quick scores measure "correct within budget".
+- Speech: Whisper large-v3-turbo Q8_0 4.2% WER on GPU (real-time factor 0.26) and CPU (RTF 3.6, slower than real time).
 - Tool calling (quick): Qwen3.6 35B-A3B 100% and Qwen3.5 4B 100% (both agent-ready); Qwen3 4B on the NPU 91% (fails the chained lookup: invents the user id instead of looking it up).
 
 First measurements (Framework 13, performance profile, AC, standard preset):
