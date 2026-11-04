@@ -53,12 +53,32 @@ pub fn ratings(votes: &[Vote]) -> Vec<Rating> {
     out
 }
 
+/// What a judge model is asked; it sees the answers as "A" and "B".
+pub fn judge_prompt(question: &str, first: &str, second: &str) -> String {
+    format!(
+        "You are judging two answers to the same request. Judge helpfulness, correctness and clarity; \
+         ignore length unless it hurts the answer.\n\n## Request\n{question}\n\n## Answer A\n{first}\n\n\
+         ## Answer B\n{second}\n\nReply with JSON: {{\"winner\": \"A\" | \"B\" | \"tie\", \"reason\": \"one sentence\"}}"
+    )
+}
+
+/// Combine the verdicts of both orders (A/B as shown, then swapped): only a
+/// consistent preference counts, else it's a tie (position bias).
+pub fn combine(as_shown: Winner, swapped: Winner) -> Winner {
+    let swapped_back = match swapped {
+        Winner::A => Winner::B,
+        Winner::B => Winner::A,
+        w => w,
+    };
+    if as_shown == swapped_back { as_shown } else { Winner::Tie }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn vote(a: &str, b: &str, w: Winner) -> Vote {
-        Vote { id: 0, created_at: 0, prompt: String::new(), model_a: a.into(), model_b: b.into(), winner: w }
+        Vote { id: 0, created_at: 0, prompt: String::new(), model_a: a.into(), model_b: b.into(), winner: w, judge: None }
     }
 
     #[test]
@@ -76,5 +96,13 @@ mod tests {
         let gain = after.iter().find(|r| r.model == "y").unwrap().elo - before.iter().find(|r| r.model == "y").unwrap().elo;
         assert!(gain > 16.0, "{gain}");
         assert!(ratings(&[vote("x", "x", Winner::A)]).is_empty(), "self-matches ignored");
+    }
+
+    #[test]
+    fn judge_needs_a_consistent_preference() {
+        assert_eq!(combine(Winner::A, Winner::B), Winner::A, "A won in both orders");
+        assert_eq!(combine(Winner::A, Winner::A), Winner::Tie, "always picked the first: position bias");
+        assert_eq!(combine(Winner::Tie, Winner::Tie), Winner::Tie);
+        assert!(judge_prompt("q", "one", "two").contains("## Answer B\ntwo"));
     }
 }

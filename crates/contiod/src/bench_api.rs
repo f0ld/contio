@@ -517,9 +517,16 @@ fn to_csv(runs: &[Run]) -> String {
 pub async fn arena(State(state): State<AppState>) -> Response {
     match state.bench.votes() {
         Ok(votes) => {
-            let ratings = contio_bench::arena::ratings(&votes);
+            let (judged, human): (Vec<_>, Vec<_>) = votes.iter().cloned().partition(|v| v.judge.is_some());
             let recent: Vec<_> = votes.iter().rev().take(50).collect();
-            Json(json!({ "ratings": ratings, "votes": votes.len(), "recent": recent })).into_response()
+            Json(json!({
+                "ratings": contio_bench::arena::ratings(&human),
+                "votes": human.len(),
+                "judge_ratings": contio_bench::arena::ratings(&judged),
+                "judge_votes": judged.len(),
+                "recent": recent,
+            }))
+            .into_response()
         }
         Err(e) => internal(&e),
     }
@@ -531,6 +538,79 @@ pub async fn vote(State(state): State<AppState>, Json(v): Json<contio_bench::sto
     }
     match state.bench.add_vote(&v) {
         Ok(id) => Json(json!({ "id": id })).into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JudgeRequest {
+    pub prompt: String,
+    pub model_a: String,
+    pub model_b: String,
+    pub answer_a: String,
+    pub answer_b: String,
+    /// Model that judges (should be neither contestant).
+    pub judge: String,
+}
+
+/// Let a local model vote: asked twice with the answers in both orders; only a
+/// consistent preference counts (else tie). Stored as a judge vote.
+pub async fn judge(State(state): State<AppState>, Json(r): Json<JudgeRequest>) -> Response {
+    use contio_bench::arena::{combine, judge_prompt};
+    use contio_bench::store::{Vote, Winner};
+    if r.model_a == r.model_b {
+        return bad_request("the two models must differ");
+    }
+    let ask = |first: &str, second: &str| {
+        let body = json!({
+            "model": r.judge,
+            "messages": [{ "role": "user", "content": judge_prompt(&r.prompt, first, second) }],
+            "max_tokens": 4096,
+            "response_format": { "type": "json_schema", "json_schema": { "name": "verdict", "schema": {
+                "type": "object",
+                "properties": { "winner": { "type": "string", "enum": ["A", "B", "tie"] }, "reason": { "type": "string" } },
+                "required": ["winner", "reason"],
+            }}},
+        });
+        let http = state.http.clone();
+        let url = format!("{}/v1/chat/completions", state.self_url);
+        async move {
+            let res = http.post(url).json(&body).send().await.map_err(|e| e.to_string())?;
+            let status = res.status();
+            let v: Value = res.json().await.map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Err(format!("judge: HTTP {status}: {}", v["error"]["message"].as_str().unwrap_or_default()));
+            }
+            let text = v["choices"][0]["message"]["content"].as_str().unwrap_or_default();
+            let verdict: Value = serde_json::from_str(text.trim()).map_err(|e| format!("judge reply isn't JSON ({e})"))?;
+            let w = match verdict["winner"].as_str() {
+                Some("A") => Winner::A,
+                Some("B") => Winner::B,
+                _ => Winner::Tie,
+            };
+            Ok::<_, String>((w, verdict["reason"].as_str().unwrap_or_default().to_owned()))
+        }
+    };
+    let shown = ask(&r.answer_a, &r.answer_b).await;
+    let swapped = ask(&r.answer_b, &r.answer_a).await;
+    let ((w1, why1), (w2, why2)) = match (shown, swapped) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return (StatusCode::BAD_GATEWAY, Json(json!({"error": {"message": e}}))).into_response(),
+    };
+    let winner = combine(w1, w2);
+    let vote = Vote {
+        id: 0,
+        created_at: 0,
+        prompt: r.prompt.clone(),
+        model_a: r.model_a.clone(),
+        model_b: r.model_b.clone(),
+        winner,
+        judge: Some(r.judge.clone()),
+    };
+    match state.bench.add_vote(&vote) {
+        Ok(id) => Json(json!({ "id": id, "winner": winner, "reasons": [why1, why2], "consistent": winner != Winner::Tie || (w1 == Winner::Tie && w2 == Winner::Tie) }))
+            .into_response(),
         Err(e) => internal(&e),
     }
 }

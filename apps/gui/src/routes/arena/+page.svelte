@@ -1,6 +1,6 @@
 <script lang="ts">
   import { streamChat } from "$lib/chat";
-  import { castVote, errorText, fetchArena, fetchModels } from "$lib/daemon";
+  import { askJudge, castVote, errorText, fetchArena, fetchModels } from "$lib/daemon";
   import { live } from "$lib/live.svelte";
   import type { ArenaRating, ArenaWinner, ModelStatus } from "$lib/types";
 
@@ -17,6 +17,12 @@
   let pool = $state<string[]>([]);
   let ratings = $state<ArenaRating[]>([]);
   let votes = $state(0);
+  let judgeRatings = $state<ArenaRating[]>([]);
+  let judgeVotes = $state(0);
+  let showJudge = $state(false);
+  let judge = $state("");
+  let judging = $state(false);
+  let verdict = $state<{ winner: ArenaWinner; reasons: string[]; consistent: boolean } | null>(null);
   let prompt = $state("");
   let sides = $state<[Side, Side] | null>(null);
   let voted = $state<ArenaWinner | null>(null);
@@ -30,6 +36,8 @@
       if (!pool.length) pool = models.map((x) => x.id);
       ratings = a.ratings;
       votes = a.votes;
+      judgeRatings = a.judge_ratings;
+      judgeVotes = a.judge_votes;
     } catch (e) {
       error = errorText(e);
     }
@@ -45,6 +53,7 @@
     if (pool.length < 2 || !prompt.trim()) return;
     error = null;
     voted = null;
+    verdict = null;
     asked = prompt.trim();
     // two different models, random sides
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
@@ -79,7 +88,30 @@
     }
   }
 
+  async function runJudge() {
+    if (!sides || !judge) return;
+    judging = true;
+    error = null;
+    try {
+      verdict = await askJudge({
+        prompt: asked,
+        model_a: sides[0].model,
+        model_b: sides[1].model,
+        answer_a: sides[0].text,
+        answer_b: sides[1].text,
+        judge,
+      });
+      await load();
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      judging = false;
+    }
+  }
+
+  const winnerText = (w: ArenaWinner) => ({ a: "A is better", b: "B is better", tie: "tie", both_bad: "both bad" })[w];
   let ready = $derived(!!sides && sides.every((s) => s.done));
+  let shown = $derived(showJudge ? judgeRatings : ratings);
 </script>
 
 <section class="card">
@@ -133,6 +165,25 @@
       <button onclick={() => vote("both_bad")}>Both bad</button>
       <button onclick={() => vote("b")}>B is better</button>
     </section>
+    <section class="card judge">
+      <span class="label">Or let a model judge</span>
+      <select bind:value={judge}>
+        <option value="">pick a judge…</option>
+        {#each models.filter((m) => !sides?.some((s) => s.model === m.id)) as m (m.id)}
+          <option value={m.id}>{m.id}</option>
+        {/each}
+      </select>
+      <button disabled={!judge || judging} onclick={runJudge}>{judging ? "Judging (both orders)…" : "Ask the judge"}</button>
+      {#if verdict}
+        <span>
+          <b>{winnerText(verdict.winner)}</b>
+          {#if !verdict.consistent}<span class="sub"> · the judge changed its mind when the order was swapped</span>{/if}
+        </span>
+      {/if}
+    </section>
+    {#if verdict}
+      <p class="sub center">{verdict.reasons[0]}</p>
+    {/if}
   {:else if voted}
     <p class="sub center">Vote saved. A was {sides[0].model}, B was {sides[1].model}.</p>
   {/if}
@@ -141,15 +192,18 @@
 <section class="card">
   <div class="head">
     <h2>Ratings</h2>
-    <span class="sub">Elo from {votes} vote{votes === 1 ? "" : "s"}; starts at 1000</span>
+    <span class="sub">Elo from {showJudge ? judgeVotes : votes} vote{(showJudge ? judgeVotes : votes) === 1 ? "" : "s"}; starts at 1000</span>
+    <span class="spacer"></span>
+    <button class="small" class:primary={!showJudge} onclick={() => (showJudge = false)}>your votes</button>
+    <button class="small" class:primary={showJudge} onclick={() => (showJudge = true)}>judge votes</button>
   </div>
-  {#if ratings.length === 0}
+  {#if shown.length === 0}
     <p class="sub">No votes yet.</p>
   {:else}
     <table class="list">
       <thead><tr><th>#</th><th>Model</th><th class="num">Elo</th><th class="num">Games</th><th class="num">Won</th><th class="num">Lost</th><th class="num">Tied</th></tr></thead>
       <tbody>
-        {#each ratings as r, i (r.model)}
+        {#each shown as r, i (r.model)}
           <tr>
             <td class="sub">{i + 1}</td>
             <td><b>{r.model}</b></td>
@@ -219,6 +273,12 @@
     display: flex;
     justify-content: center;
     gap: 0.75rem;
+  }
+  .judge {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
   }
   .center {
     text-align: center;

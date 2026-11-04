@@ -129,6 +129,9 @@ pub struct Vote {
     pub model_a: String,
     pub model_b: String,
     pub winner: Winner,
+    /// Model that judged; `None` for a human vote.
+    #[serde(default)]
+    pub judge: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,6 +188,13 @@ impl Store {
     fn init(conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;").map_err(err)?;
         conn.execute_batch(SCHEMA).map_err(err)?;
+        // v3: judge votes (added to databases created before)
+        let has_judge = conn
+            .prepare("SELECT judge FROM arena_votes LIMIT 0")
+            .is_ok();
+        if !has_judge {
+            conn.execute_batch("ALTER TABLE arena_votes ADD COLUMN judge TEXT; PRAGMA user_version = 3;").map_err(err)?;
+        }
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -282,8 +292,8 @@ impl Store {
     pub fn add_vote(&self, v: &Vote) -> Result<i64> {
         let c = self.conn();
         c.execute(
-            "INSERT INTO arena_votes (created_at, prompt, model_a, model_b, winner) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![now(), v.prompt, v.model_a, v.model_b, v.winner.as_str()],
+            "INSERT INTO arena_votes (created_at, prompt, model_a, model_b, winner, judge) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![now(), v.prompt, v.model_a, v.model_b, v.winner.as_str(), v.judge],
         )
         .map_err(err)?;
         Ok(c.last_insert_rowid())
@@ -293,7 +303,7 @@ impl Store {
     pub fn votes(&self) -> Result<Vec<Vote>> {
         let c = self.conn();
         let mut stmt = c
-            .prepare("SELECT id, created_at, prompt, model_a, model_b, winner FROM arena_votes ORDER BY id")
+            .prepare("SELECT id, created_at, prompt, model_a, model_b, winner, judge FROM arena_votes ORDER BY id")
             .map_err(err)?;
         stmt.query_map([], |r| {
             Ok(Vote {
@@ -303,6 +313,7 @@ impl Store {
                 model_a: r.get(3)?,
                 model_b: r.get(4)?,
                 winner: Winner::parse(&r.get::<_, String>(5)?),
+                judge: r.get(6)?,
             })
         })
         .map_err(err)?

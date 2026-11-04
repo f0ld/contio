@@ -174,7 +174,11 @@ export const deleteBenchRun = (id: number) => send<{ deleted: number }>(`/api/be
 
 export const benchExportUrl = (format: "csv" | "json") => `${DAEMON_URL}/api/bench/export?format=${format}`;
 
-export const fetchArena = () => request<{ ratings: ArenaRating[]; votes: number }>("/api/arena");
+export const fetchArena = () =>
+  request<{ ratings: ArenaRating[]; votes: number; judge_ratings: ArenaRating[]; judge_votes: number }>("/api/arena");
+
+export const askJudge = (r: { prompt: string; model_a: string; model_b: string; answer_a: string; answer_b: string; judge: string }) =>
+  send<{ winner: ArenaWinner; reasons: string[]; consistent: boolean }>("/api/arena/judge", "POST", r);
 
 export const castVote = (vote: { prompt: string; model_a: string; model_b: string; winner: ArenaWinner }) =>
   send<{ id: number }>("/api/arena/votes", "POST", vote);

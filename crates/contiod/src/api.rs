@@ -123,6 +123,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bench/export", get(bench_api::export))
         .route("/api/arena", get(bench_api::arena))
         .route("/api/arena/votes", post(bench_api::vote))
+        .route("/api/arena/judge", post(bench_api::judge))
         .route("/api/aliases", get(aliases::list))
         .route("/api/aliases/{name}", put(aliases::put).delete(aliases::delete))
         .route("/api/catalog", get(catalog_api::overview))
