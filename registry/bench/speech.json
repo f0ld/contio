@@ -1,0 +1,127 @@
+{
+ "source": "https://huggingface.co/datasets/openslr/librispeech_asr (clean/test), from LibriSpeech by Vassil Panayotov et al. (http://www.openslr.org/12)",
+ "license": "CC BY 4.0",
+ "seed": 20261104,
+ "items": [
+  {
+   "id": "1284-1180-0027",
+   "file": "1284-1180-0027.flac",
+   "text": "YET THAT TASK WAS NOT SO EASY AS YOU MAY SUPPOSE",
+   "speaker": 1284
+  },
+  {
+   "id": "1580-141084-0039",
+   "file": "1580-141084-0039.flac",
+   "text": "I ENTERED AND I TOOK YOU INTO MY CONFIDENCE AS TO THE SUGGESTIONS OF THE SIDE TABLE",
+   "speaker": 1580
+  },
+  {
+   "id": "2300-131720-0020",
+   "file": "2300-131720-0020.flac",
+   "text": "IT WAS SPECIALLY SUITED FOR A TRIAL PLANT ALSO IN THE EARLY DAYS WHEN A YIELD OF SIX OR EIGHT LAMPS TO THE HORSE POWER WAS CONSIDERED SUBJECT FOR CONGRATULATION",
+   "speaker": 2300
+  },
+  {
+   "id": "237-126133-0015",
+   "file": "237-126133-0015.flac",
+   "text": "YES ALL ALONE BY HIMSELF ASSERTED JASPER VEHEMENTLY AND WINKING FURIOUSLY TO THE OTHERS TO STOP THEIR LAUGHING HE DID NOW TRULY PHRONSIE",
+   "speaker": 237
+  },
+  {
+   "id": "237-134493-0012",
+   "file": "237-134493-0012.flac",
+   "text": "I GET WET TO MY KNEES WHEN I GO DOWN TO PICK CHERRIES",
+   "speaker": 237
+  },
+  {
+   "id": "4446-2273-0012",
+   "file": "4446-2273-0012.flac",
+   "text": "THANK YOU BUT I DON'T LIKE IT SO WELL AS THIS",
+   "speaker": 4446
+  },
+  {
+   "id": "4446-2273-0034",
+   "file": "4446-2273-0034.flac",
+   "text": "HE FELT A TREMOR RUN THROUGH THE SLENDER YELLOW FIGURE IN FRONT OF HIM",
+   "speaker": 4446
+  },
+  {
+   "id": "4507-16021-0049",
+   "file": "4507-16021-0049.flac",
+   "text": "THERE IS HARDLY ONE DAY OUT OF A HUNDRED WHICH IS WHOLLY JOYOUS AND SUNNY",
+   "speaker": 4507
+  },
+  {
+   "id": "4970-29095-0009",
+   "file": "4970-29095-0009.flac",
+   "text": "MARGARET BOLTON ALMOST LOST FOR A MOMENT HER HABITUAL PLACIDITY",
+   "speaker": 4970
+  },
+  {
+   "id": "4992-23283-0013",
+   "file": "4992-23283-0013.flac",
+   "text": "MY LORD MISS MILNER'S TASTE IS NOT A DEPRAVED ONE IT IS BUT TOO REFINED",
+   "speaker": 4992
+  },
+  {
+   "id": "5142-33396-0036",
+   "file": "5142-33396-0036.flac",
+   "text": "SO I WILL GIVE OUT THIS LAW THAT MY MEN SHALL NEVER LEAVE YOU ALONE",
+   "speaker": 5142
+  },
+  {
+   "id": "5142-36377-0001",
+   "file": "5142-36377-0001.flac",
+   "text": "IN FIVE MINUTES I WAS IN A NEW WORLD AND MY MELANCHOLY ROOM WAS FULL OF THE LIVELIEST FRENCH COMPANY",
+   "speaker": 5142
+  },
+  {
+   "id": "61-70968-0039",
+   "file": "61-70968-0039.flac",
+   "text": "AND MINE IS WILL STUTELEY SHALL WE BE COMRADES",
+   "speaker": 61
+  },
+  {
+   "id": "61-70970-0012",
+   "file": "61-70970-0012.flac",
+   "text": "YET HE WILL TEACH YOU A FEW TRICKS WHEN MORNING IS COME",
+   "speaker": 61
+  },
+  {
+   "id": "672-122797-0050",
+   "file": "672-122797-0050.flac",
+   "text": "THEY SNUFFED ABOUT THE FIR TREE AND RUSTLED AMONG THE BRANCHES",
+   "speaker": 672
+  },
+  {
+   "id": "6829-68769-0015",
+   "file": "6829-68769-0015.flac",
+   "text": "SOMETIMES I'M THAT YEARNING FOR A SMOKE I'M NEARLY CRAZY AN I DUNNO WHICH IS WORST DYIN ONE WAY OR ANOTHER",
+   "speaker": 6829
+  },
+  {
+   "id": "6829-68771-0018",
+   "file": "6829-68771-0018.flac",
+   "text": "FOR A MOMENT BETH STOOD STARING WHILE THE NEW MAID REGARDED HER WITH COMPOSURE AND A SLIGHT SMILE UPON HER BEAUTIFUL FACE",
+   "speaker": 6829
+  },
+  {
+   "id": "6930-76324-0005",
+   "file": "6930-76324-0005.flac",
+   "text": "THE TWIN BROTHER DID SOMETHING SHE DIDN'T LIKE AND SHE TURNED HIS PICTURE TO THE WALL",
+   "speaker": 6930
+  },
+  {
+   "id": "7127-75947-0029",
+   "file": "7127-75947-0029.flac",
+   "text": "THE YOUNG GIRLS HAD INDEED MADE THEMSELVES SMALL INDEED INVISIBLE",
+   "speaker": 7127
+  },
+  {
+   "id": "8230-279154-0039",
+   "file": "8230-279154-0039.flac",
+   "text": "THIS KNOWLEDGE IS MEMORY IN ONE SENSE THOUGH IN ANOTHER IT IS NOT",
+   "speaker": 8230
+  }
+ ]
+}

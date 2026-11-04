@@ -81,11 +81,17 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
         return (StatusCode::CONFLICT, Json(json!({"error": {"message": msg, "type": "conflict", "job_id": j.id}})))
             .into_response();
     }
-    let mut ids = Vec::new();
+    // (profile id, name requests use): an alias like `whisper-npu` addresses
+    // FLM's Whisper inside an NPU LLM's process
+    let mut ids: Vec<(String, String, ModelKind)> = Vec::new();
     for name in &req.models {
-        let (id, _) = crate::gateway::resolve(&state, name);
+        let (id, upstream) = crate::gateway::resolve(&state, name);
+        let whisper_alias = upstream.is_some_and(|u| u.starts_with("whisper"));
         match state.manager.profile(&id) {
-            Ok(p) if req.suites.iter().any(|s| s.applies_to(p.kind)) => ids.push(id),
+            Ok(_) if whisper_alias && req.suites.contains(&SuiteKind::Speech) => {
+                ids.push((id, name.clone(), ModelKind::Transcription));
+            }
+            Ok(p) if req.suites.iter().any(|s| s.applies_to(p.kind)) => ids.push((id.clone(), id, p.kind)),
             Ok(p) => {
                 return bad_request(&format!(
                     "none of the chosen suites runs on `{name}` ({:?} model): chat models take perf, tools, \
@@ -97,7 +103,8 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
         }
     }
     let suites: Vec<&str> = req.suites.iter().map(|s| s.name()).collect();
-    let title = format!("benchmark {} ({}, {})", ids.join(", "), suites.join("+"), json!(req.preset).as_str().unwrap_or_default());
+    let names: Vec<&str> = ids.iter().map(|(_, n, _)| n.as_str()).collect();
+    let title = format!("benchmark {} ({}, {})", names.join(", "), suites.join("+"), json!(req.preset).as_str().unwrap_or_default());
     let st = state.clone();
     // one benchmark at a time: parallel runs would measure each other
     let job = state.installer.jobs.spawn("bench", &title, Some("bench".into()), move |ctx| async move {
@@ -115,15 +122,14 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
         };
         let mut runs = Vec::new();
         let n = ids.len();
-        for (i, id) in ids.iter().enumerate() {
+        for (i, (id, name, kind)) in ids.iter().enumerate() {
             // no early return: the power profile must be restored below
             if ctx.is_cancelled() {
                 break;
             }
-            let sub = if n > 1 { ctx.with_prefix(&format!("[{}/{n} {id}] ", i + 1)) } else { ctx.clone() };
-            let kind = st.manager.profile(id).map(|p| p.kind).unwrap_or_default();
-            for &suite in req.suites.iter().filter(|s| s.applies_to(kind)) {
-                runs.push(run_suite(&st, id, suite, &req, &sub).await);
+            let sub = if n > 1 { ctx.with_prefix(&format!("[{}/{n} {name}] ", i + 1)) } else { ctx.clone() };
+            for &suite in req.suites.iter().filter(|s| s.applies_to(*kind)) {
+                runs.push(run_suite(&st, id, name, suite, &req, &sub).await);
             }
         }
         if let Some(g) = guard {
@@ -157,7 +163,14 @@ impl Progress for JobProgress<'_> {
 }
 
 /// One suite on one model; returns the run id (the run is stored either way).
-async fn run_suite(state: &AppState, id: &str, suite: SuiteKind, req: &BenchRequest, ctx: &JobCtx) -> Result<i64, String> {
+async fn run_suite(
+    state: &AppState,
+    id: &str,
+    name: &str,
+    suite: SuiteKind,
+    req: &BenchRequest,
+    ctx: &JobCtx,
+) -> Result<i64, String> {
     let profile = state.manager.profile(id).map_err(|e| e.to_string())?;
     let (backend, backend_desc) = state.manager.backend_description(id).map_err(|e| e.to_string())?;
 
@@ -198,7 +211,7 @@ async fn run_suite(state: &AppState, id: &str, suite: SuiteKind, req: &BenchRequ
         .bench
         .start(&NewRun {
             suite: suite.name(),
-            model: id,
+            model: name,
             preset: &preset,
             target: &target_info,
             conditions: &conditions_json,
@@ -216,6 +229,9 @@ async fn run_suite(state: &AppState, id: &str, suite: SuiteKind, req: &BenchRequ
             .await
             .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
         SuiteKind::Retrieval => retrieval(state, id, profile.kind, ctx)
+            .await
+            .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
+        SuiteKind::Speech => speech(state, id, name, ctx)
             .await
             .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
     };
@@ -239,6 +255,20 @@ async fn tool_calls(
     let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
     let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
     let report = contio_bench::tools::run(&state.http, &target, &Suite::builtin(), req.preset.quality_reps(), &JobProgress(ctx)).await;
+    drop(lease);
+    report
+}
+
+async fn speech(
+    state: &AppState,
+    id: &str,
+    name: &str,
+    ctx: &JobCtx,
+) -> Result<contio_bench::speech::SpeechReport, String> {
+    ctx.step("loading");
+    let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
+    let target = Target { base_url: state.self_url.clone(), model: name.to_owned(), context: None, llama: false };
+    let report = contio_bench::speech::run(&state.http, &target, &JobProgress(ctx)).await;
     drop(lease);
     report
 }

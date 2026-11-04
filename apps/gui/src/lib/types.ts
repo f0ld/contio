@@ -300,7 +300,7 @@ export interface PreflightResult {
 }
 
 // Mirrors crates/contio-bench (store::Run) and contiod/src/bench_api.rs.
-export type BenchSuite = "perf" | "tools" | "reasoning" | "knowledge" | "coding" | "retrieval";
+export type BenchSuite = "perf" | "tools" | "reasoning" | "knowledge" | "coding" | "retrieval" | "speech";
 export type BenchPreset = "quick" | "standard" | "full";
 
 export interface BenchRun {
@@ -367,6 +367,12 @@ export interface QualityReportView {
   truncated: number;
   categories: Record<string, number>;
   items: { id: string; category?: string; runs: number; passed: number; failures: string[]; mean_s: number }[];
+}
+
+export interface SpeechReportView {
+  wer: number;
+  rtf: number;
+  utterances: { id: string; reference: string; hypothesis: string; words: number; errors: number; audio_s: number }[];
 }
 
 export interface RetrievalReportView {

@@ -10,6 +10,8 @@ pub mod perf;
 pub mod power_profile;
 pub mod quality;
 pub mod retrieval;
+pub mod speech;
+mod speech_files;
 pub mod store;
 pub mod tools;
 
@@ -50,6 +52,8 @@ pub enum SuiteKind {
     Coding,
     /// Ranking quality of embedding and reranker models.
     Retrieval,
+    /// Word error rate of speech-to-text models (LibriSpeech subset).
+    Speech,
 }
 
 impl SuiteKind {
@@ -61,6 +65,7 @@ impl SuiteKind {
             Self::Knowledge => "knowledge",
             Self::Coding => "coding",
             Self::Retrieval => "retrieval",
+            Self::Speech => "speech",
         }
     }
 
@@ -69,6 +74,7 @@ impl SuiteKind {
         use contio_core::model::ModelKind;
         match self {
             Self::Retrieval => matches!(kind, ModelKind::Embedding | ModelKind::Reranker),
+            Self::Speech => kind == ModelKind::Transcription,
             _ => kind == ModelKind::Chat,
         }
     }
@@ -78,7 +84,7 @@ impl SuiteKind {
             Self::Reasoning => Some(quality::QualitySuite::Reasoning),
             Self::Knowledge => Some(quality::QualitySuite::Knowledge),
             Self::Coding => Some(quality::QualitySuite::Coding),
-            Self::Perf | Self::Tools | Self::Retrieval => None,
+            Self::Perf | Self::Tools | Self::Retrieval | Self::Speech => None,
         }
     }
 }

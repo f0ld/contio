@@ -200,6 +200,22 @@ pub fn bench_runs(runs: &[Value]) -> String {
     if !quality.is_empty() {
         parts.push(quality_runs(&quality));
     }
+    if !of("speech").is_empty() {
+        let rows: Vec<[String; 5]> = of("speech")
+            .iter()
+            .map(|r| {
+                let m = &r["metrics"];
+                [
+                    r["id"].to_string(),
+                    r["model"].as_str().unwrap_or_default().to_owned(),
+                    device_quant(r),
+                    m["speech_wer"].as_f64().map_or(status_note(r), |v| format!("{:.1}%", v * 100.0)),
+                    num(m["speech_rtf"].as_f64(), 3),
+                ]
+            })
+            .collect();
+        parts.push(table(&["ID", "MODEL", "DEVICE", "WER", "REAL-TIME FACTOR"], &rows));
+    }
     if !of("retrieval").is_empty() {
         let rows: Vec<[String; 6]> = of("retrieval")
             .iter()
@@ -361,6 +377,19 @@ pub fn bench_detail(r: &Value) -> String {
     }
     if rep["items"].is_array() {
         return quality_detail(s, rep);
+    }
+    if rep["utterances"].is_array() {
+        let _ = writeln!(
+            s,
+            "\x1b[1mWER {:.1}%\x1b[0m · real-time factor {}",
+            rep["wer"].as_f64().unwrap_or(0.0) * 100.0,
+            num(rep["rtf"].as_f64(), 3)
+        );
+        for u in rep["utterances"].as_array().into_iter().flatten().filter(|u| u["errors"] != 0) {
+            let _ = writeln!(s, "\n{} ({} errors)\n  ref: {}\n  got: {}", u["id"].as_str().unwrap_or_default(), u["errors"],
+                u["reference"].as_str().unwrap_or_default().to_lowercase(), u["hypothesis"].as_str().unwrap_or_default());
+        }
+        return s.trim_end().to_owned();
     }
     if rep["queries"].is_array() {
         let _ = writeln!(

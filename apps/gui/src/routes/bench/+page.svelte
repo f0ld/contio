@@ -21,6 +21,7 @@
     PerfReportView,
     QualityReportView,
     RetrievalReportView,
+    SpeechReportView,
     ToolsReportView,
   } from "$lib/types";
 
@@ -30,7 +31,8 @@
     { id: "reasoning", name: "reasoning", title: "Math word problems (GSM8K subset)" },
     { id: "knowledge", name: "knowledge", title: "Multiple choice across 14 subjects (MMLU-Pro subset)" },
     { id: "coding", name: "coding", title: "Python functions checked by unit tests in a podman sandbox (HumanEval subset)" },
-    { id: "retrieval", name: "retrieval", title: "Ranking 24 documents for paraphrased queries (embedding and reranker models)" },
+    { id: "retrieval", name: "retrieval", title: "Ranking 48 documents for 24 paraphrased queries (embedding and reranker models)" },
+    { id: "speech", name: "speech", title: "Word error rate on 20 LibriSpeech utterances (Whisper models)" },
   ];
   const QUALITY: BenchSuite[] = ["reasoning", "knowledge", "coding"];
 
@@ -52,7 +54,7 @@
   async function load() {
     try {
       const [m, r] = await Promise.all([fetchModels(), fetchBenchRuns()]);
-      models = m.filter((x) => x.kind === "chat" || x.kind === "embedding" || x.kind === "reranker");
+      models = m.filter((x) => x.kind === "chat" || x.kind === "embedding" || x.kind === "reranker" || x.kind === "transcription");
       runs = r;
       error = null;
     } catch (e) {
@@ -135,7 +137,8 @@
     }),
   );
   let retrievalRuns = $derived(latest("retrieval"));
-  let anyQuality = $derived(toolRuns.length > 0 || retrievalRuns.length > 0 || QUALITY.some((s) => qualityRuns[s]?.length));
+  let speechRuns = $derived(latest("speech"));
+  let anyQuality = $derived(toolRuns.length > 0 || retrievalRuns.length > 0 || speechRuns.length > 0 || QUALITY.some((s) => qualityRuns[s]?.length));
   let profiles = $derived(new Set(perfRuns.map((r) => r.conditions.power_profile)));
 
   const memOf = (r: BenchRun) =>
@@ -145,6 +148,7 @@
   const pct = (v: number | undefined) => (v == null ? "–" : `${Math.round(v * 100)}%`);
   let perfReport = $derived(selected?.suite === "perf" ? (selected.report as PerfReportView | null) : null);
   let toolsReport = $derived(selected?.suite === "tools" ? (selected.report as ToolsReportView | null) : null);
+  let speechReport = $derived(selected?.suite === "speech" ? (selected.report as SpeechReportView | null) : null);
   let retrievalReport = $derived(selected?.suite === "retrieval" ? (selected.report as RetrievalReportView | null) : null);
   let qualityReport = $derived(
     selected && QUALITY.includes(selected.suite) ? (selected.report as QualityReportView | null) : null,
@@ -234,6 +238,9 @@
       {#if toolRuns.length}
         <BarChart title="Tool calling" bars={bars(toolRuns, "tools_pass_rate", 100)} format={(v) => `${Math.round(v)}%`} />
       {/if}
+      {#if speechRuns.length}
+        <BarChart title="Speech: word error rate" lowerIsBetter bars={bars(speechRuns, "speech_wer", 100)} format={(v) => `${v.toFixed(1)}%`} />
+      {/if}
       {#if retrievalRuns.length}
         <BarChart title="Retrieval: relevant document ranked first" bars={bars(retrievalRuns, "retrieval_recall1", 100)} format={(v) => `${Math.round(v)}%`} />
       {/if}
@@ -274,6 +281,7 @@
             <td class="num">
               {#if r.status !== "done"}<span class="state {r.status}">{r.status}</span>
               {:else if r.suite === "perf"}{n(r.metrics.tg_tps)} tok/s · {n(r.metrics.pp512_tps, 0)} pp
+              {:else if r.suite === "speech"}WER {n(r.metrics.speech_wer * 100)}% · RTF {n(r.metrics.speech_rtf, 3)}
               {:else if r.suite === "retrieval"}{pct(r.metrics.retrieval_recall1)} first · MRR {n(r.metrics.retrieval_mrr, 2)}
               {:else if r.suite === "tools"}{pct(r.metrics.tools_pass_rate)}{#if r.metrics.agent_ready === 1}<span class="pill fits">agent-ready</span>{/if}
               {:else}{pct(r.metrics[`${r.suite}_pass_rate`])}{/if}
@@ -354,6 +362,25 @@
         </tbody>
       </table>
     {/if}
+    {#if speechReport}
+      <p>
+        <b>WER {n(speechReport.wer * 100)}%</b>
+        <span class="sub">real-time factor {n(speechReport.rtf, 3)} (below 1 = faster than real time)</span>
+      </p>
+      <table class="list">
+        <thead><tr><th>Utterance</th><th class="num">Errors</th><th>Transcript</th></tr></thead>
+        <tbody>
+          {#each speechReport.utterances.filter((u) => u.errors > 0) as u (u.id)}
+            <tr>
+              <td class="sub">{u.id}</td>
+              <td class="num">{u.errors}/{u.words}</td>
+              <td><div>{u.hypothesis}</div><div class="sub">{u.reference.toLowerCase()}</div></td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+
     {#if retrievalReport}
       <p>
         <b>{pct(retrievalReport.recall_at_1)} ranked first</b>

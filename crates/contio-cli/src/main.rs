@@ -173,9 +173,9 @@ enum BenchAction {
         preset: String,
         /// perf (speed, energy, memory), tools (tool calling, JSON; agent-ready badge),
         /// reasoning (GSM8K), knowledge (MMLU-Pro), coding (HumanEval, runs code in podman),
-        /// retrieval (embedding and reranker models)
+        /// retrieval (embedding and reranker models), speech (Whisper word error rate)
         #[arg(long, short, value_delimiter = ',', default_value = "perf",
-              value_parser = ["perf", "tools", "reasoning", "knowledge", "coding", "retrieval"])]
+              value_parser = ["perf", "tools", "reasoning", "knowledge", "coding", "retrieval", "speech"])]
         suite: Vec<String>,
         /// Keep other loaded models running (they share memory bandwidth).
         #[arg(long)]
