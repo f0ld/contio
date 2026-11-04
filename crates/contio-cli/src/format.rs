@@ -257,6 +257,14 @@ fn quality_runs(runs: &[&Value]) -> String {
 }
 
 fn device_quant(r: &Value) -> String {
+    let no_think = if r["target"]["thinking"] == false { " no-think" } else { "" };
+    format!(
+        "{}{no_think}",
+        device_quant_only(r)
+    )
+}
+
+fn device_quant_only(r: &Value) -> String {
     format!(
         "{} {}",
         r["target"]["device"].as_str().unwrap_or("?"),

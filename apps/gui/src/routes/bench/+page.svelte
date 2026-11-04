@@ -45,6 +45,7 @@
   let preset = $state<BenchPreset>("quick");
   let suites = $state<BenchSuite[]>(["perf"]);
   let exclusive = $state(true);
+  let thinkingOff = $state(false);
   let profile = $state<"" | "power-saver" | "balanced" | "performance">("");
   let jobId = $state<number | null>(null);
   let job = $derived(jobs.byId(jobId) ?? jobs.list.find((j) => j.kind === "bench" && j.state === "running") ?? null);
@@ -79,7 +80,7 @@
   async function run() {
     error = null;
     try {
-      jobId = (await startBench({ models: picked, preset, suites, exclusive, reload: true, power_profile: profile || undefined })).job_id;
+      jobId = (await startBench({ models: picked, preset, suites, exclusive, reload: true, power_profile: profile || undefined, thinking: thinkingOff ? false : undefined })).job_id;
       refreshJobs();
     } catch (e) {
       error = errorText(e);
@@ -108,7 +109,13 @@
 
   const label = (r: BenchRun) => r.model;
   const sub = (r: BenchRun) =>
-    [r.target.device?.toUpperCase(), r.target.origin?.quant !== "none" ? r.target.origin?.quant : null, r.conditions.power_profile, r.preset]
+    [
+      r.target.device?.toUpperCase(),
+      r.target.origin?.quant !== "none" ? r.target.origin?.quant : null,
+      r.target.thinking === false ? "thinking off" : null,
+      r.conditions.power_profile,
+      r.preset,
+    ]
       .filter(Boolean)
       .join(" · ");
 
@@ -184,6 +191,7 @@
       <option value="balanced">balanced</option>
       <option value="performance">performance</option>
     </select>
+    <label class="pick" title="Ask Qwen-style models to answer without thinking (tool calling and quality suites)"><input type="checkbox" bind:checked={thinkingOff} /> thinking off</label>
     <label class="pick" title="Unload other idle models so they don't share memory bandwidth"><input type="checkbox" bind:checked={exclusive} /> unload other models</label>
     <span class="spacer"></span>
     <button class="primary" disabled={!picked.length || !suites.length || job?.state === "running"} onclick={run}>

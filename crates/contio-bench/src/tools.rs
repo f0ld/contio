@@ -299,6 +299,7 @@ async fn complete(
     // repetition loops (Qwen's model cards warn against it; seen here too),
     // and agents don't use it. Repetitions turn the randomness into a pass rate.
     let mut body = json!({ "model": target.model, "messages": messages, "max_tokens": MAX_TOKENS });
+    target.apply_extra(&mut body);
     if !tools.is_empty() {
         body["tools"] = json!(tools);
     }

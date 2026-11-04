@@ -387,13 +387,15 @@ contio serve                            # run daemon in foreground
 - [x] Measured results feed the catalog: installed quants show their latest speed, tool-calling pass rate and agent-ready badge (install dialog, `contio show`).
 - [x] Robustness: cancelling a benchmark drops its in-flight request (the backend stops generating); shutdown cancels benchmark jobs and gives open requests 10 s; orphan cleanup skips backends whose parent contiod is still alive.
 - [x] Retrieval suite for embedding and reranker models (`registry/bench/retrieval.json`, written for contio): 24 paraphrased queries over 48 documents, half of them same-topic distractors; recall@1 and MRR. nomic-embed-text-v1.5 and Qwen3 Reranker 0.6B: 92% / MRR 0.96 each (an easier first version without distractors gave 100% for both).
-- [ ] Whisper (WER) quality; custom prompt sets; arena with Elo; LLM-as-judge
-- [ ] Quant-ladder and device-comparison views; "thinking off" variant
+- [x] Speech suite: word error rate on 20 short LibriSpeech test-clean utterances (CC BY 4.0, 2.1 MB, compiled in) plus real-time factor; also runs FLM's NPU Whisper through its alias.
+- [x] "Thinking off" variant (`thinking: false` → `chat_template_kwargs.enable_thinking = false`) for tool-calling and quality suites; recorded with the run.
+- [ ] Custom prompt sets; arena with Elo; LLM-as-judge
+- [ ] Quant-ladder and device-comparison views
 
 Findings so far:
 - llama.cpp rejects requests that combine `tools` with a `response_format` schema ("failed to parse grammar"); FastFlowLM accepts them. The gateway could drop the schema grammar or validate afterwards (M5).
 - Reasoning (quick, 4096 tokens): Qwen3.5 4B 65%; every failure was a cut-off, every finished answer was right. The model reaches the answer and then keeps second-guessing it (not a loop). Qwen's recommended sampling (temp 0.6, top-k 20, presence penalty 1.5) gave the same score, so the budget, not sampling, decides quick scores; standard uses 8192 tokens.
-- Tool calling (quick): Qwen3.5 4B 100% (agent-ready), Qwen3 4B on the NPU 91% (fails chained lookups: invents the user id), Qwen3.6 35B-A3B 87% on the first suite version (before the JSON/no-tools fix; to rerun).
+- Tool calling (quick): Qwen3.6 35B-A3B 100% and Qwen3.5 4B 100% (both agent-ready); Qwen3 4B on the NPU 91% (fails the chained lookup: invents the user id instead of looking it up).
 
 First measurements (Framework 13, performance profile, AC, standard preset):
 

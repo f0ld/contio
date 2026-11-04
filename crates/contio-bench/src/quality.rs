@@ -387,11 +387,12 @@ async fn attempt(
     tokens: &mut u64,
     truncated: &mut u32,
 ) -> Result<(), String> {
-    let body = json!({
+    let mut body = json!({
         "model": target.model,
         "messages": [{ "role": "user", "content": item.prompt() }],
         "max_tokens": max_tokens,
     });
+    target.apply_extra(&mut body);
     let res = http
         .post(format!("{}/v1/chat/completions", target.base_url))
         .json(&body)

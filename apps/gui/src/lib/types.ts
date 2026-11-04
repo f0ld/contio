@@ -314,6 +314,7 @@ export interface BenchRun {
   error: string | null;
   target: {
     device?: DeviceKind;
+    thinking?: boolean | null;
     backend?: string;
     context?: number | null;
     origin?: ModelOrigin | null;
@@ -337,6 +338,8 @@ export interface BenchRequest {
   suites: BenchSuite[];
   exclusive: boolean;
   reload: boolean;
+  /** false: ask the template to skip thinking (quality suites). */
+  thinking?: boolean;
   /** Switch for the run, then restore. */
   power_profile?: "power-saver" | "balanced" | "performance";
 }

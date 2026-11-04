@@ -36,6 +36,18 @@ pub struct Target {
     pub context: Option<u32>,
     /// llama.cpp: send `ignore_eos` and `cache_prompt: false`, read `timings`.
     pub llama: bool,
+    /// Extra fields for quality requests, e.g. `chat_template_kwargs` to turn
+    /// thinking off.
+    pub extra: serde_json::Map<String, Value>,
+}
+
+impl Target {
+    /// Add the extra fields to a request body.
+    pub fn apply_extra(&self, body: &mut Value) {
+        for (k, v) in &self.extra {
+            body[k] = v.clone();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -448,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn runs_against_a_streaming_server() {
-        let target = Target { base_url: mock_server().await, model: "m".into(), context: Some(2048), llama: true };
+        let target = Target { base_url: mock_server().await, model: "m".into(), context: Some(2048), llama: true, extra: Default::default() };
         let opts = PerfOptions { prompt_tokens: vec![256, 4096], gen_tokens: 16, reps: 2, concurrency: 3 };
         let monitor = Monitor::start(None);
         let r = run(&reqwest::Client::new(), &target, &opts, &monitor, &Quiet).await.unwrap();

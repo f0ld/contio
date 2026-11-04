@@ -43,6 +43,10 @@ pub struct BenchRequest {
     /// Unload and reload the model to measure load time and memory. Default: true.
     #[serde(default = "yes")]
     pub reload: bool,
+    /// `false`: ask the chat template to skip thinking (Qwen-style
+    /// `enable_thinking`), for tool-calling and quality suites.
+    #[serde(default)]
+    pub thinking: Option<bool>,
     /// Switch to this power profile for the run and restore it afterwards
     /// (power-saver, balanced, performance). Default: leave it as it is.
     #[serde(default)]
@@ -51,6 +55,14 @@ pub struct BenchRequest {
 
 /// Firmware power limits take a moment to follow a profile switch.
 const PROFILE_SETTLE: Duration = Duration::from_secs(3);
+
+fn extra(req: &BenchRequest) -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    if req.thinking == Some(false) {
+        m.insert("chat_template_kwargs".into(), json!({ "enable_thinking": false }));
+    }
+    m
+}
 
 fn yes() -> bool {
     true
@@ -204,6 +216,7 @@ async fn run_suite(
     let target_info = json!({
         "id": profile.id, "device": profile.device, "backend": backend, "context": profile.context,
         "source": profile.source, "origin": profile.origin, "extra_args": profile.extra_args,
+        "thinking": req.thinking,
     });
     let conditions_json = serde_json::to_value(&conditions).unwrap_or_default();
     let preset = json!(req.preset).as_str().unwrap_or_default().to_owned();
@@ -253,7 +266,7 @@ async fn tool_calls(
     ctx.step("loading");
     // held for the whole run: the model can't be evicted midway
     let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
-    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false, extra: extra(req) };
     let report = contio_bench::tools::run(&state.http, &target, &Suite::builtin(), req.preset.quality_reps(), &JobProgress(ctx)).await;
     drop(lease);
     report
@@ -267,7 +280,7 @@ async fn speech(
 ) -> Result<contio_bench::speech::SpeechReport, String> {
     ctx.step("loading");
     let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
-    let target = Target { base_url: state.self_url.clone(), model: name.to_owned(), context: None, llama: false };
+    let target = Target { base_url: state.self_url.clone(), model: name.to_owned(), context: None, llama: false, extra: Default::default() };
     let report = contio_bench::speech::run(&state.http, &target, &JobProgress(ctx)).await;
     drop(lease);
     report
@@ -283,7 +296,7 @@ async fn retrieval(
     let mode = if kind == ModelKind::Reranker { Mode::Reranker } else { Mode::Embedding };
     ctx.step("loading");
     let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
-    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false, extra: Default::default() };
     let report = contio_bench::retrieval::run(&state.http, &target, mode, &JobProgress(ctx)).await;
     drop(lease);
     report
@@ -299,7 +312,7 @@ async fn quality(
     let which = suite.quality().expect("a quality suite");
     ctx.step("loading");
     let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
-    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false, extra: extra(req) };
     let work = state.installer.data_dir.join("cache/sandbox");
     let report =
         contio_bench::quality::run(&state.http, &target, which, req.preset, &work, &JobProgress(ctx)).await;
@@ -348,6 +361,7 @@ async fn measure(
         model: id.to_owned(),
         context: profile.context,
         llama: backend == "llama.cpp",
+        extra: Default::default(),
     };
     let perf = contio_bench::perf::run(&state.http, &target, &req.preset.perf_options(), &monitor, &JobProgress(ctx))
         .await?;
