@@ -177,7 +177,8 @@ mod tests {
         assert_eq!(cosine(&[1.0, 0.0], &[0.0, 1.0]), 0.0);
         assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
         assert_eq!(ranking(&[0.1, 0.9, 0.5]), [1, 2, 0]);
-        let ids = [&"a".to_owned(), &"b".to_owned()].map(|s| s);
+        let (a, b) = ("a".to_owned(), "b".to_owned());
+        let ids = [&a, &b];
         let q = Query { q: "x".into(), doc: "b".into() };
         assert_eq!(result(&q, &ids, &[1, 0]).rank, 1);
         assert_eq!(result(&q, &ids, &[0, 1]).rank, 2);
