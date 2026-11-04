@@ -200,6 +200,23 @@ pub fn bench_runs(runs: &[Value]) -> String {
     if !quality.is_empty() {
         parts.push(quality_runs(&quality));
     }
+    if !of("retrieval").is_empty() {
+        let rows: Vec<[String; 6]> = of("retrieval")
+            .iter()
+            .map(|r| {
+                let m = &r["metrics"];
+                [
+                    r["id"].to_string(),
+                    r["model"].as_str().unwrap_or_default().to_owned(),
+                    device_quant(r),
+                    m["retrieval_recall1"].as_f64().map_or(status_note(r), |v| format!("{:.0}%", v * 100.0)),
+                    num(m["retrieval_mrr"].as_f64(), 3),
+                    num(m["retrieval_s"].as_f64(), 1),
+                ]
+            })
+            .collect();
+        parts.push(table(&["ID", "MODEL", "DEVICE", "RECALL@1", "MRR", "SEC"], &rows));
+    }
     parts.join("\n\n")
 }
 
@@ -344,6 +361,26 @@ pub fn bench_detail(r: &Value) -> String {
     }
     if rep["items"].is_array() {
         return quality_detail(s, rep);
+    }
+    if rep["queries"].is_array() {
+        let _ = writeln!(
+            s,
+            "\x1b[1mrecall@1 {:.0}%\x1b[0m · MRR {} · {} s",
+            rep["recall_at_1"].as_f64().unwrap_or(0.0) * 100.0,
+            num(rep["mrr"].as_f64(), 3),
+            num(rep["seconds"].as_f64(), 1)
+        );
+        let rows: Vec<[String; 3]> = rep["queries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|q| q["rank"] != 1)
+            .map(|q| [q["query"].as_str().unwrap_or_default().to_owned(), q["rank"].to_string(), q["top"].as_str().unwrap_or_default().to_owned()])
+            .collect();
+        if !rows.is_empty() {
+            let _ = writeln!(s, "\nmissed:\n{}", table(&["QUERY", "RANK", "TOP DOC"], &rows));
+        }
+        return s.trim_end().to_owned();
     }
     let load = &rep["load"];
     let mut facts = Vec::new();

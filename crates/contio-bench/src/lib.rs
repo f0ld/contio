@@ -9,6 +9,7 @@ pub mod monitor;
 pub mod perf;
 pub mod power_profile;
 pub mod quality;
+pub mod retrieval;
 pub mod store;
 pub mod tools;
 
@@ -47,6 +48,8 @@ pub enum SuiteKind {
     Knowledge,
     /// Python functions checked by unit tests in a sandbox (HumanEval subset).
     Coding,
+    /// Ranking quality of embedding and reranker models.
+    Retrieval,
 }
 
 impl SuiteKind {
@@ -57,6 +60,16 @@ impl SuiteKind {
             Self::Reasoning => "reasoning",
             Self::Knowledge => "knowledge",
             Self::Coding => "coding",
+            Self::Retrieval => "retrieval",
+        }
+    }
+
+    /// Whether the suite can run on a model of this kind.
+    pub fn applies_to(self, kind: contio_core::model::ModelKind) -> bool {
+        use contio_core::model::ModelKind;
+        match self {
+            Self::Retrieval => matches!(kind, ModelKind::Embedding | ModelKind::Reranker),
+            _ => kind == ModelKind::Chat,
         }
     }
 
@@ -65,7 +78,7 @@ impl SuiteKind {
             Self::Reasoning => Some(quality::QualitySuite::Reasoning),
             Self::Knowledge => Some(quality::QualitySuite::Knowledge),
             Self::Coding => Some(quality::QualitySuite::Coding),
-            Self::Perf | Self::Tools => None,
+            Self::Perf | Self::Tools | Self::Retrieval => None,
         }
     }
 }

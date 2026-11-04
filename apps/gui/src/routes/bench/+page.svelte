@@ -20,6 +20,7 @@
     ModelStatus,
     PerfReportView,
     QualityReportView,
+    RetrievalReportView,
     ToolsReportView,
   } from "$lib/types";
 
@@ -29,6 +30,7 @@
     { id: "reasoning", name: "reasoning", title: "Math word problems (GSM8K subset)" },
     { id: "knowledge", name: "knowledge", title: "Multiple choice across 14 subjects (MMLU-Pro subset)" },
     { id: "coding", name: "coding", title: "Python functions checked by unit tests in a podman sandbox (HumanEval subset)" },
+    { id: "retrieval", name: "retrieval", title: "Ranking 24 documents for paraphrased queries (embedding and reranker models)" },
   ];
   const QUALITY: BenchSuite[] = ["reasoning", "knowledge", "coding"];
 
@@ -50,7 +52,7 @@
   async function load() {
     try {
       const [m, r] = await Promise.all([fetchModels(), fetchBenchRuns()]);
-      models = m.filter((x) => x.kind === "chat");
+      models = m.filter((x) => x.kind === "chat" || x.kind === "embedding" || x.kind === "reranker");
       runs = r;
       error = null;
     } catch (e) {
@@ -132,7 +134,8 @@
       return t && x != null && y != null ? [{ label: p.model, sub: sub(p), x, y: y * 100 }] : [];
     }),
   );
-  let anyQuality = $derived(toolRuns.length > 0 || QUALITY.some((s) => qualityRuns[s]?.length));
+  let retrievalRuns = $derived(latest("retrieval"));
+  let anyQuality = $derived(toolRuns.length > 0 || retrievalRuns.length > 0 || QUALITY.some((s) => qualityRuns[s]?.length));
   let profiles = $derived(new Set(perfRuns.map((r) => r.conditions.power_profile)));
 
   const memOf = (r: BenchRun) =>
@@ -142,6 +145,7 @@
   const pct = (v: number | undefined) => (v == null ? "–" : `${Math.round(v * 100)}%`);
   let perfReport = $derived(selected?.suite === "perf" ? (selected.report as PerfReportView | null) : null);
   let toolsReport = $derived(selected?.suite === "tools" ? (selected.report as ToolsReportView | null) : null);
+  let retrievalReport = $derived(selected?.suite === "retrieval" ? (selected.report as RetrievalReportView | null) : null);
   let qualityReport = $derived(
     selected && QUALITY.includes(selected.suite) ? (selected.report as QualityReportView | null) : null,
   );
@@ -230,6 +234,9 @@
       {#if toolRuns.length}
         <BarChart title="Tool calling" bars={bars(toolRuns, "tools_pass_rate", 100)} format={(v) => `${Math.round(v)}%`} />
       {/if}
+      {#if retrievalRuns.length}
+        <BarChart title="Retrieval: relevant document ranked first" bars={bars(retrievalRuns, "retrieval_recall1", 100)} format={(v) => `${Math.round(v)}%`} />
+      {/if}
       {#each QUALITY as q (q)}
         {#if qualityRuns[q]?.length}
           <BarChart
@@ -267,6 +274,7 @@
             <td class="num">
               {#if r.status !== "done"}<span class="state {r.status}">{r.status}</span>
               {:else if r.suite === "perf"}{n(r.metrics.tg_tps)} tok/s · {n(r.metrics.pp512_tps, 0)} pp
+              {:else if r.suite === "retrieval"}{pct(r.metrics.retrieval_recall1)} first · MRR {n(r.metrics.retrieval_mrr, 2)}
               {:else if r.suite === "tools"}{pct(r.metrics.tools_pass_rate)}{#if r.metrics.agent_ready === 1}<span class="pill fits">agent-ready</span>{/if}
               {:else}{pct(r.metrics[`${r.suite}_pass_rate`])}{/if}
             </td>
@@ -346,6 +354,23 @@
         </tbody>
       </table>
     {/if}
+    {#if retrievalReport}
+      <p>
+        <b>{pct(retrievalReport.recall_at_1)} ranked first</b>
+        <span class="sub">MRR {n(retrievalReport.mrr, 3)} · {retrievalReport.mode} · {n(retrievalReport.seconds)} s</span>
+      </p>
+      {#if retrievalReport.queries.some((q) => q.rank > 1)}
+        <table class="list">
+          <thead><tr><th>Missed query</th><th class="num">Rank</th><th>Ranked first instead</th></tr></thead>
+          <tbody>
+            {#each retrievalReport.queries.filter((q) => q.rank > 1) as q (q.query)}
+              <tr><td>{q.query}</td><td class="num">{q.rank}</td><td class="sub">{q.top}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    {/if}
+
     {#if qualityReport}
       <p>
         <b>{pct(qualityReport.pass_rate)} passed</b>

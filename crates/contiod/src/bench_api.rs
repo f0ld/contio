@@ -69,12 +69,30 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
     {
         return bad_request("power_profile: power-saver, balanced or performance");
     }
+    // one benchmark at a time: parallel runs would measure each other
+    if let Some(j) = state
+        .installer
+        .jobs
+        .list()
+        .into_iter()
+        .find(|j| j.kind == "bench" && j.state == contio_install::jobs::JobState::Running)
+    {
+        let msg = format!("benchmark job {} is still running; wait for it or cancel it", j.id);
+        return (StatusCode::CONFLICT, Json(json!({"error": {"message": msg, "type": "conflict", "job_id": j.id}})))
+            .into_response();
+    }
     let mut ids = Vec::new();
     for name in &req.models {
         let (id, _) = crate::gateway::resolve(&state, name);
         match state.manager.profile(&id) {
-            Ok(p) if p.kind == ModelKind::Chat => ids.push(id),
-            Ok(p) => return bad_request(&format!("`{name}` is a {:?} model; benchmarks cover chat models so far", p.kind)),
+            Ok(p) if req.suites.iter().any(|s| s.applies_to(p.kind)) => ids.push(id),
+            Ok(p) => {
+                return bad_request(&format!(
+                    "none of the chosen suites runs on `{name}` ({:?} model): chat models take perf, tools, \
+                     reasoning, knowledge, coding; embedding and reranker models take retrieval",
+                    p.kind
+                ));
+            }
             Err(e) => return crate::gateway::backend_error(&e),
         }
     }
@@ -103,7 +121,8 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
                 break;
             }
             let sub = if n > 1 { ctx.with_prefix(&format!("[{}/{n} {id}] ", i + 1)) } else { ctx.clone() };
-            for &suite in &req.suites {
+            let kind = st.manager.profile(id).map(|p| p.kind).unwrap_or_default();
+            for &suite in req.suites.iter().filter(|s| s.applies_to(kind)) {
                 runs.push(run_suite(&st, id, suite, &req, &sub).await);
             }
         }
@@ -196,6 +215,9 @@ async fn run_suite(state: &AppState, id: &str, suite: SuiteKind, req: &BenchRequ
         SuiteKind::Reasoning | SuiteKind::Knowledge | SuiteKind::Coding => quality(state, id, suite, req, ctx)
             .await
             .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
+        SuiteKind::Retrieval => retrieval(state, id, profile.kind, ctx)
+            .await
+            .map(|r| (serde_json::to_value(&r).unwrap_or_default(), r.metrics())),
     };
     let (status, error, report, metrics) = match &result {
         Ok((report, metrics)) => (RunStatus::Done, None, report.clone(), metrics.clone()),
@@ -217,6 +239,22 @@ async fn tool_calls(
     let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
     let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
     let report = contio_bench::tools::run(&state.http, &target, &Suite::builtin(), req.preset.quality_reps(), &JobProgress(ctx)).await;
+    drop(lease);
+    report
+}
+
+async fn retrieval(
+    state: &AppState,
+    id: &str,
+    kind: ModelKind,
+    ctx: &JobCtx,
+) -> Result<contio_bench::retrieval::RetrievalReport, String> {
+    use contio_bench::retrieval::Mode;
+    let mode = if kind == ModelKind::Reranker { Mode::Reranker } else { Mode::Embedding };
+    ctx.step("loading");
+    let lease = state.manager.acquire(id).await.map_err(|e| e.to_string())?;
+    let target = Target { base_url: state.self_url.clone(), model: id.to_owned(), context: None, llama: false };
+    let report = contio_bench::retrieval::run(&state.http, &target, mode, &JobProgress(ctx)).await;
     drop(lease);
     report
 }
