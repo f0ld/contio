@@ -31,6 +31,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "process", "sync", "fs", "io-util"] }
 toml = "1"
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -7,6 +7,7 @@
 
 pub mod monitor;
 pub mod perf;
+pub mod power_profile;
 pub mod quality;
 pub mod store;
 pub mod tools;

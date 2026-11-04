@@ -1,5 +1,6 @@
 <script lang="ts">
   import BarChart, { type Bar } from "$lib/components/BarChart.svelte";
+  import ScatterChart, { type Point } from "$lib/components/ScatterChart.svelte";
   import {
     benchExportUrl,
     deleteBenchRun,
@@ -12,7 +13,24 @@
   } from "$lib/daemon";
   import { jobs, refreshJobs } from "$lib/jobs.svelte";
   import { live } from "$lib/live.svelte";
-  import type { BenchPreset, BenchRun, BenchSuite, ModelStatus, PerfReportView, ToolsReportView } from "$lib/types";
+  import type {
+    BenchPreset,
+    BenchRun,
+    BenchSuite,
+    ModelStatus,
+    PerfReportView,
+    QualityReportView,
+    ToolsReportView,
+  } from "$lib/types";
+
+  const SUITES: { id: BenchSuite; name: string; title: string }[] = [
+    { id: "perf", name: "speed, energy, memory", title: "Prefill and generation speed, time to first token, power, load time, memory" },
+    { id: "tools", name: "tool calling", title: "23 cases: simple, choosing, parallel, multi-turn, no-call, JSON; gates agent-ready" },
+    { id: "reasoning", name: "reasoning", title: "Math word problems (GSM8K subset)" },
+    { id: "knowledge", name: "knowledge", title: "Multiple choice across 14 subjects (MMLU-Pro subset)" },
+    { id: "coding", name: "coding", title: "Python functions checked by unit tests in a podman sandbox (HumanEval subset)" },
+  ];
+  const QUALITY: BenchSuite[] = ["reasoning", "knowledge", "coding"];
 
   let models = $state<ModelStatus[]>([]);
   let runs = $state<BenchRun[]>([]);
@@ -23,6 +41,7 @@
   let preset = $state<BenchPreset>("quick");
   let suites = $state<BenchSuite[]>(["perf"]);
   let exclusive = $state(true);
+  let profile = $state<"" | "power-saver" | "balanced" | "performance">("");
   let jobId = $state<number | null>(null);
   let job = $derived(jobs.byId(jobId) ?? jobs.list.find((j) => j.kind === "bench" && j.state === "running") ?? null);
 
@@ -56,7 +75,7 @@
   async function run() {
     error = null;
     try {
-      jobId = (await startBench({ models: picked, preset, suites, exclusive, reload: true })).job_id;
+      jobId = (await startBench({ models: picked, preset, suites, exclusive, reload: true, power_profile: profile || undefined })).job_id;
       refreshJobs();
     } catch (e) {
       error = errorText(e);
@@ -103,6 +122,17 @@
 
   let perfRuns = $derived(latest("perf"));
   let toolRuns = $derived(latest("tools"));
+  let qualityRuns = $derived(Object.fromEntries(QUALITY.map((s) => [s, latest(s)])) as Record<BenchSuite, BenchRun[]>);
+  /** Models with a speed and a tool-calling result. */
+  let tradeoff = $derived<Point[]>(
+    perfRuns.flatMap((p) => {
+      const t = toolRuns.find((r) => r.model === p.model);
+      const x = p.metrics.tg_tps;
+      const y = t?.metrics.tools_pass_rate;
+      return t && x != null && y != null ? [{ label: p.model, sub: sub(p), x, y: y * 100 }] : [];
+    }),
+  );
+  let anyQuality = $derived(toolRuns.length > 0 || QUALITY.some((s) => qualityRuns[s]?.length));
   let profiles = $derived(new Set(perfRuns.map((r) => r.conditions.power_profile)));
 
   const memOf = (r: BenchRun) =>
@@ -112,6 +142,9 @@
   const pct = (v: number | undefined) => (v == null ? "–" : `${Math.round(v * 100)}%`);
   let perfReport = $derived(selected?.suite === "perf" ? (selected.report as PerfReportView | null) : null);
   let toolsReport = $derived(selected?.suite === "tools" ? (selected.report as ToolsReportView | null) : null);
+  let qualityReport = $derived(
+    selected && QUALITY.includes(selected.suite) ? (selected.report as QualityReportView | null) : null,
+  );
 </script>
 
 <section class="card form">
@@ -125,13 +158,23 @@
   </div>
   <div class="row">
     <span class="label">Measure</span>
-    <label class="pick"><input type="checkbox" checked={suites.includes("perf")} onchange={() => (suites = toggle(suites, "perf"))} /> speed, energy, memory</label>
-    <label class="pick"><input type="checkbox" checked={suites.includes("tools")} onchange={() => (suites = toggle(suites, "tools"))} /> tool calling (agent-ready)</label>
+    {#each SUITES as su (su.id)}
+      <label class="pick" title={su.title}><input type="checkbox" checked={suites.includes(su.id)} onchange={() => (suites = toggle(suites, su.id))} /> {su.name}</label>
+    {/each}
+  </div>
+  <div class="row">
     <span class="label">Preset</span>
     <select bind:value={preset}>
-      <option value="quick">quick (~1 min per model)</option>
-      <option value="standard">standard (4k prompts, 3 runs)</option>
-      <option value="full">full (16k prompts, 5 runs)</option>
+      <option value="quick">quick: short prompts; 20 items per quality suite</option>
+      <option value="standard">standard: + 4k prompts, 3 runs; all items</option>
+      <option value="full">full: + 16k prompts, 5 runs; all items 3×</option>
+    </select>
+    <span class="label" title="Switched for the run and restored afterwards">Power profile</span>
+    <select bind:value={profile}>
+      <option value="">as it is</option>
+      <option value="power-saver">power saver</option>
+      <option value="balanced">balanced</option>
+      <option value="performance">performance</option>
     </select>
     <label class="pick" title="Unload other idle models so they don't share memory bandwidth"><input type="checkbox" bind:checked={exclusive} /> unload other models</label>
     <span class="spacer"></span>
@@ -167,14 +210,35 @@
   </section>
 {/if}
 
-{#if toolRuns.length}
+{#if anyQuality}
   <section class="card">
     <div class="head">
-      <h2>Tool calling</h2>
-      <span class="sub">agent-ready = ≥ 90% overall and ≥ 75% in every category</span>
+      <h2>Answer quality</h2>
+      <span class="sub">share of items passed · agent-ready = tool calling ≥ 90% overall and ≥ 75% in every category</span>
     </div>
     <div class="charts">
-      <BarChart title="Tool-call suite passed" bars={bars(toolRuns, "tools_pass_rate", 100)} format={(v) => `${Math.round(v)}%`} />
+      {#if tradeoff.length}
+        <ScatterChart
+          title="Speed vs tool calling"
+          points={tradeoff}
+          xLabel="generation tok/s"
+          yLabel="tool calls passed"
+          yMax={100}
+          yFormat={(v) => `${Math.round(v)}%`}
+        />
+      {/if}
+      {#if toolRuns.length}
+        <BarChart title="Tool calling" bars={bars(toolRuns, "tools_pass_rate", 100)} format={(v) => `${Math.round(v)}%`} />
+      {/if}
+      {#each QUALITY as q (q)}
+        {#if qualityRuns[q]?.length}
+          <BarChart
+            title={SUITES.find((s) => s.id === q)?.title ?? q}
+            bars={bars(qualityRuns[q], `${q}_pass_rate`, 100)}
+            format={(v) => `${Math.round(v)}%`}
+          />
+        {/if}
+      {/each}
     </div>
   </section>
 {/if}
@@ -199,11 +263,12 @@
             <td class="sub">{r.id}</td>
             <td><b>{r.model}</b></td>
             <td class="sub">{sub(r)}</td>
-            <td>{r.suite === "perf" ? "speed" : "tools"}</td>
+            <td>{r.suite === "perf" ? "speed" : r.suite === "tools" ? "tool calling" : r.suite}</td>
             <td class="num">
               {#if r.status !== "done"}<span class="state {r.status}">{r.status}</span>
               {:else if r.suite === "perf"}{n(r.metrics.tg_tps)} tok/s · {n(r.metrics.pp512_tps, 0)} pp
-              {:else}{pct(r.metrics.tools_pass_rate)}{#if r.metrics.agent_ready === 1}<span class="pill fits">agent-ready</span>{/if}{/if}
+              {:else if r.suite === "tools"}{pct(r.metrics.tools_pass_rate)}{#if r.metrics.agent_ready === 1}<span class="pill fits">agent-ready</span>{/if}
+              {:else}{pct(r.metrics[`${r.suite}_pass_rate`])}{/if}
             </td>
             <td class="sub">{when(r.started_at)}</td>
             <td><button class="small danger" title="Delete" disabled={r.status === "running"} onclick={(e) => { e.stopPropagation(); remove(r); }}>✕</button></td>
@@ -276,6 +341,31 @@
               <td class="num">{c.passed}/{c.runs}</td>
               <td class="num">{n(c.mean_s)}</td>
               <td class="sub why">{c.failures[0] ?? ""}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+    {#if qualityReport}
+      <p>
+        <b>{pct(qualityReport.pass_rate)} passed</b>
+        <span class="sub">
+          {qualityReport.items.length} items × {qualityReport.reps}
+          {#if qualityReport.truncated}· {qualityReport.truncated} hit the token limit{/if}
+        </span>
+      </p>
+      {#if Object.keys(qualityReport.categories).length}
+        <p class="sub">{Object.entries(qualityReport.categories).map(([k, v]) => `${k} ${pct(v)}`).join(" · ")}</p>
+      {/if}
+      <table class="list">
+        <thead><tr><th>Item</th><th class="num">Passed</th><th class="num">Sec</th><th>First failure</th></tr></thead>
+        <tbody>
+          {#each qualityReport.items as it (it.id)}
+            <tr>
+              <td>{it.id}{#if it.category}<span class="sub"> · {it.category}</span>{/if}</td>
+              <td class="num">{it.passed}/{it.runs}</td>
+              <td class="num">{n(it.mean_s)}</td>
+              <td class="sub why">{it.failures[0] ?? ""}</td>
             </tr>
           {/each}
         </tbody>

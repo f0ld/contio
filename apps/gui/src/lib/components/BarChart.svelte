@@ -73,7 +73,7 @@
       {#each ticks as t (t)}
         {@const x = LABEL_W + (t / scaleMax) * plotW}
         <line class="grid" x1={x} x2={x} y1="0" y2={sorted.length * ROW} />
-        <text class="tick" x={x} y={sorted.length * ROW + 15} text-anchor="middle">{compact(t)}</text>
+        <text class="tick" x={x} y={sorted.length * ROW + 15} text-anchor="middle">{format ? format(t) : compact(t)}</text>
       {/each}
       {#each sorted as b, i (b.label + (b.sub ?? ""))}
         {@const y = i * ROW + (ROW - BAR) / 2}

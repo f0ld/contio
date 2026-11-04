@@ -43,7 +43,14 @@ pub struct BenchRequest {
     /// Unload and reload the model to measure load time and memory. Default: true.
     #[serde(default = "yes")]
     pub reload: bool,
+    /// Switch to this power profile for the run and restore it afterwards
+    /// (power-saver, balanced, performance). Default: leave it as it is.
+    #[serde(default)]
+    pub power_profile: Option<String>,
 }
+
+/// Firmware power limits take a moment to follow a profile switch.
+const PROFILE_SETTLE: Duration = Duration::from_secs(3);
 
 fn yes() -> bool {
     true
@@ -56,6 +63,11 @@ fn default_suites() -> Vec<SuiteKind> {
 pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>) -> Response {
     if req.models.is_empty() || req.suites.is_empty() {
         return bad_request("`models` and `suites` must not be empty");
+    }
+    if let Some(p) = &req.power_profile
+        && !contio_bench::power_profile::PROFILES.contains(&p.as_str())
+    {
+        return bad_request("power_profile: power-saver, balanced or performance");
     }
     let mut ids = Vec::new();
     for name in &req.models {
@@ -71,15 +83,38 @@ pub async fn start(State(state): State<AppState>, Json(req): Json<BenchRequest>)
     let st = state.clone();
     // one benchmark at a time: parallel runs would measure each other
     let job = state.installer.jobs.spawn("bench", &title, Some("bench".into()), move |ctx| async move {
+        let guard = match &req.power_profile {
+            Some(p) => {
+                ctx.step(&format!("switching to the {p} power profile"));
+                let g = contio_bench::power_profile::apply(p).await?;
+                if g.previous != *p {
+                    ctx.log(&format!("power profile {} → {p} (restored afterwards)", g.previous));
+                    tokio::time::sleep(PROFILE_SETTLE).await;
+                }
+                Some(g)
+            }
+            None => None,
+        };
         let mut runs = Vec::new();
         let n = ids.len();
         for (i, id) in ids.iter().enumerate() {
-            ctx.check_cancelled()?;
+            // no early return: the power profile must be restored below
+            if ctx.is_cancelled() {
+                break;
+            }
             let sub = if n > 1 { ctx.with_prefix(&format!("[{}/{n} {id}] ", i + 1)) } else { ctx.clone() };
             for &suite in &req.suites {
                 runs.push(run_suite(&st, id, suite, &req, &sub).await);
             }
         }
+        if let Some(g) = guard {
+            let previous = g.previous.clone();
+            match g.restore().await {
+                Ok(()) => ctx.log(&format!("power profile restored to {previous}")),
+                Err(e) => ctx.log(&format!("couldn't restore the power profile to {previous}: {e}")),
+            }
+        }
+        ctx.check_cancelled()?;
         let failed: Vec<String> = runs.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
         let ids: Vec<i64> = runs.iter().filter_map(|r| r.as_ref().ok().copied()).collect();
         if ids.is_empty() {

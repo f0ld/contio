@@ -182,6 +182,9 @@ enum BenchAction {
         /// Don't reload the model (skips load time and memory measurement).
         #[arg(long)]
         no_reload: bool,
+        /// Run under this power profile and restore the current one afterwards.
+        #[arg(long, value_parser = ["power-saver", "balanced", "performance"])]
+        power_profile: Option<String>,
         #[arg(long)]
         detach: bool,
     },
@@ -413,9 +416,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             eprintln!("\x1b[2m{:.1}s\x1b[0m", started.elapsed().as_secs_f64());
         }
         Command::Bench { action } => match action {
-            BenchAction::Run { models, preset, suite, shared, no_reload, detach } => {
+            BenchAction::Run { models, preset, suite, shared, no_reload, power_profile, detach } => {
                 let body = json!({
                     "models": models, "preset": preset, "suites": suite, "exclusive": !shared, "reload": !no_reload,
+                    "power_profile": power_profile,
                 });
                 let r = client.post("/api/bench", &body).await?;
                 if let Some(result) = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await? {

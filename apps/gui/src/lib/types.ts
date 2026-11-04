@@ -288,7 +288,7 @@ export interface PreflightResult {
 }
 
 // Mirrors crates/contio-bench (store::Run) and contiod/src/bench_api.rs.
-export type BenchSuite = "perf" | "tools";
+export type BenchSuite = "perf" | "tools" | "reasoning" | "knowledge" | "coding";
 export type BenchPreset = "quick" | "standard" | "full";
 
 export interface BenchRun {
@@ -325,6 +325,8 @@ export interface BenchRequest {
   suites: BenchSuite[];
   exclusive: boolean;
   reload: boolean;
+  /** Switch for the run, then restore. */
+  power_profile?: "power-saver" | "balanced" | "performance";
 }
 
 export interface PerfSummary {
@@ -344,6 +346,15 @@ export interface PerfReportView {
     skipped: number[];
     concurrency: { requests: number; aggregate_tps: number; per_request_decode_tps: number | null } | null;
   };
+}
+
+export interface QualityReportView {
+  suite: string;
+  pass_rate: number;
+  reps: number;
+  truncated: number;
+  categories: Record<string, number>;
+  items: { id: string; category?: string; runs: number; passed: number; failures: string[]; mean_s: number }[];
 }
 
 export interface ToolsReportView {
