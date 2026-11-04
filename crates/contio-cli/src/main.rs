@@ -139,6 +139,11 @@ enum Command {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Speed, energy and memory benchmarks; results are kept by the daemon.
+    Bench {
+        #[command(subcommand)]
+        action: BenchAction,
+    },
     /// Other names for models: list, set, remove.
     Alias {
         #[command(subcommand)]
@@ -155,6 +160,42 @@ enum Command {
     Cancel { id: u64 },
     /// Run a failed or cancelled job again.
     Retry { id: u64 },
+}
+
+#[derive(Debug, Subcommand)]
+enum BenchAction {
+    /// Benchmark models one after another (chat models).
+    Run {
+        #[arg(required = true)]
+        models: Vec<String>,
+        /// quick (~1 min), standard (adds 4k prompts, 3 runs, 4 parallel), full (adds 16k, 5 runs)
+        #[arg(long, short, default_value = "quick", value_parser = ["quick", "standard", "full"])]
+        preset: String,
+        /// Keep other loaded models running (they share memory bandwidth).
+        #[arg(long)]
+        shared: bool,
+        /// Don't reload the model (skips load time and memory measurement).
+        #[arg(long)]
+        no_reload: bool,
+        #[arg(long)]
+        detach: bool,
+    },
+    /// Stored results, newest first.
+    Results {
+        #[arg(long, short)]
+        model: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        limit: u32,
+    },
+    /// One run in detail.
+    Show { id: i64 },
+    /// All results as CSV (one column per metric) or JSON (full reports).
+    Export {
+        #[arg(long, default_value = "csv", value_parser = ["csv", "json"])]
+        format: String,
+    },
+    /// Delete a stored run.
+    Rm { id: i64 },
 }
 
 #[derive(Debug, Subcommand)]
@@ -366,6 +407,49 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             }
             eprintln!("\x1b[2m{:.1}s\x1b[0m", started.elapsed().as_secs_f64());
         }
+        Command::Bench { action } => match action {
+            BenchAction::Run { models, preset, shared, no_reload, detach } => {
+                let body = json!({ "models": models, "preset": preset, "exclusive": !shared, "reload": !no_reload });
+                let r = client.post("/api/bench", &body).await?;
+                if let Some(result) = client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await? {
+                    for e in result["errors"].as_array().into_iter().flatten() {
+                        eprintln!("\x1b[33m{}\x1b[0m", e.as_str().unwrap_or_default());
+                    }
+                    let ids: Vec<i64> = result["runs"].as_array().into_iter().flatten().filter_map(Value::as_i64).collect();
+                    let mut runs = Vec::new();
+                    for id in ids {
+                        runs.push(client.get(&format!("/api/bench/runs/{id}")).await?);
+                    }
+                    if cli.json { println!("{}", Value::Array(runs)) } else { println!("{}", format::bench_runs(&runs)) }
+                }
+            }
+            BenchAction::Results { model, limit } => {
+                let q = model.map(|m| format!("&model={}", urlencode(&m))).unwrap_or_default();
+                let raw = client.get(&format!("/api/bench/runs?suite=perf&limit={limit}{q}")).await?;
+                if cli.json {
+                    println!("{raw}");
+                } else {
+                    println!("{}", format::bench_runs(raw.as_array().map(Vec::as_slice).unwrap_or_default()));
+                }
+            }
+            BenchAction::Show { id } => {
+                let raw = client.get(&format!("/api/bench/runs/{id}")).await?;
+                if cli.json { println!("{raw}") } else { println!("{}", format::bench_detail(&raw)) }
+            }
+            BenchAction::Export { format } => {
+                let res = client
+                    .http
+                    .get(format!("{}/api/bench/export?format={format}", client.base))
+                    .send()
+                    .await
+                    .with_context(|| client.unreachable())?;
+                print!("{}", res.text().await?);
+            }
+            BenchAction::Rm { id } => {
+                client.delete(&format!("/api/bench/runs/{id}")).await?;
+                eprintln!("deleted run {id}");
+            }
+        },
         Command::Alias { action } => match action.unwrap_or(AliasAction::List) {
             AliasAction::List => {
                 let raw = client.get("/api/aliases").await?;

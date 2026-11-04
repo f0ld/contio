@@ -193,6 +193,20 @@ impl ModelManager {
         self.inner.backends.read().expect("backends lock poisoned").iter().map(|b| b.describe()).collect()
     }
 
+    /// Process id of the running server for `id`.
+    pub fn pid(&self, id: &str) -> Option<u32> {
+        match &self.lock_slots().get(id)?.state {
+            SlotState::Ready(i) => i.pid(),
+            _ => None,
+        }
+    }
+
+    /// The backend that runs `id` (name, how it runs), e.g. for benchmark records.
+    pub fn backend_description(&self, id: &str) -> Result<(String, String), BackendError> {
+        let b = self.backend_for(&self.profile(id)?)?;
+        Ok((b.name().to_owned(), b.describe()))
+    }
+
     /// Get a lease on a running instance of `id`, loading it (and evicting
     /// others from its pool) if needed.
     pub async fn acquire(&self, id: &str) -> Result<Lease, BackendError> {

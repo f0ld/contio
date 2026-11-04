@@ -14,7 +14,7 @@ pub enum DeviceKind {
 }
 
 /// Unified memory is split into pools that are budgeted separately (spec §7.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryPoolKind {
     /// BIOS VRAM carve-out used by the iGPU.

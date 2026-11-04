@@ -168,6 +168,148 @@ fn indent(s: &str) -> String {
     s.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")
 }
 
+fn num(v: Option<f64>, digits: usize) -> String {
+    v.map_or("-".into(), |x| format!("{x:.digits$}"))
+}
+
+/// Memory a run used: VRAM growth for GPU models; otherwise the larger of
+/// system-pool growth and the backend's resident memory (mapped weights count
+/// as cache in the pool, but are resident).
+fn mem_used(r: &Value) -> Option<f64> {
+    let m = &r["metrics"];
+    let f = |k: &str| m[k].as_f64().unwrap_or(0.0);
+    let v = if r["target"]["device"] == "gpu" { f("mem_gpu_bytes") } else { f("mem_system_bytes").max(f("rss_bytes")) };
+    (v > 0.0).then_some(v)
+}
+
+pub fn bench_runs(runs: &[Value]) -> String {
+    if runs.is_empty() {
+        return "no benchmark runs yet: try `contio bench run <model>`".into();
+    }
+    let rows: Vec<[String; 12]> = runs
+        .iter()
+        .map(|r| {
+            let m = &r["metrics"];
+            let f = |k: &str| m[k].as_f64();
+            let status = match r["status"].as_str() {
+                Some("done") => String::new(),
+                Some(s) => s.to_owned(),
+                None => "?".into(),
+            };
+            [
+                r["id"].to_string(),
+                r["model"].as_str().unwrap_or_default().to_owned(),
+                format!(
+                    "{} {}",
+                    r["target"]["device"].as_str().unwrap_or("?"),
+                    r["target"]["origin"]["quant"].as_str().filter(|q| *q != "none").unwrap_or("")
+                )
+                .trim()
+                .to_owned(),
+                r["preset"].as_str().unwrap_or_default().to_owned(),
+                num(f("tg_tps"), 1),
+                num(f("pp512_tps"), 0),
+                num(f("pp4096_tps"), 0),
+                num(f("ttft512_s"), 2),
+                num(f("j_per_token"), 2),
+                num(f("load_s"), 1),
+                mem_used(r).map_or("-".into(), |b| gib(b as u64)),
+                [r["conditions"]["power_profile"].as_str().unwrap_or("?"), &status]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ]
+        })
+        .collect();
+    let mut out = table(
+        &["ID", "MODEL", "DEVICE", "PRESET", "DECODE", "PP512", "PP4K", "TTFT", "J/TOK", "LOAD s", "MEM", "PROFILE"],
+        &rows,
+    );
+    out.push_str("\n\x1b[2mtok/s · TTFT at 512 tokens · J/TOK = SoC energy per generated token · MEM = VRAM growth (GPU) or resident memory\x1b[0m");
+    out
+}
+
+pub fn bench_detail(r: &Value) -> String {
+    let mut s = String::new();
+    let t = &r["target"];
+    let c = &r["conditions"];
+    let _ = writeln!(
+        s,
+        "\x1b[1mrun {} · {}\x1b[0m  {} preset · {}",
+        r["id"],
+        r["model"].as_str().unwrap_or_default(),
+        r["preset"].as_str().unwrap_or_default(),
+        r["status"].as_str().unwrap_or_default()
+    );
+    let quant = t["origin"]["quant"].as_str().unwrap_or("-");
+    let _ = writeln!(s, "{} · {} · {quant} · context {}", t["device"].as_str().unwrap_or("?"), t["backend"].as_str().unwrap_or("?"), t["context"]);
+    let on_ac = match c["on_ac"].as_bool() {
+        Some(true) => "AC".to_owned(),
+        Some(false) => format!("battery {}%", c["battery_percent"]),
+        None => "power source unknown".into(),
+    };
+    let _ = writeln!(s, "\x1b[2m{} · {on_ac} · {}\x1b[0m", c["power_profile"].as_str().unwrap_or("?"), c["backend"].as_str().unwrap_or_default());
+    if let Some(o) = c["other_models"].as_array().filter(|o| !o.is_empty()) {
+        let names: Vec<&str> = o.iter().filter_map(Value::as_str).collect();
+        let _ = writeln!(s, "\x1b[33malso loaded: {}\x1b[0m", names.join(", "));
+    }
+    if let Some(e) = r["error"].as_str() {
+        let _ = writeln!(s, "\x1b[31m{e}\x1b[0m");
+    }
+    let rep = &r["report"];
+    let load = &rep["load"];
+    let mut facts = Vec::new();
+    if let Some(l) = load["load_s"].as_f64() {
+        facts.push(format!("load {l:.1} s"));
+    }
+    if let Some(d) = mem_used(r) {
+        let est = load["estimated_bytes"].as_u64().map(|e| format!(" (estimated {})", gib(e))).unwrap_or_default();
+        facts.push(format!("memory {}{est}", gib(d as u64)));
+    }
+    if let Some(w) = rep["perf"]["idle_watts"].as_f64() {
+        facts.push(format!("idle {w:.1} W"));
+    }
+    if !facts.is_empty() {
+        let _ = writeln!(s, "{}", facts.join(" · "));
+    }
+    let rows: Vec<[String; 7]> = rep["perf"]["prompts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| {
+            let m = &p["summary"];
+            [
+                m["prompt_tokens"].to_string(),
+                num(m["ttft_s"].as_f64(), 2),
+                num(m["prefill_tps"].as_f64(), 0),
+                num(m["decode_tps"].as_f64(), 1),
+                num(m["avg_watts"].as_f64(), 1),
+                num(m["joules_per_token"].as_f64(), 2),
+                p["samples"].as_array().map_or(0, Vec::len).to_string(),
+            ]
+        })
+        .collect();
+    if !rows.is_empty() {
+        let _ = writeln!(s, "\n{}", table(&["PROMPT", "TTFT s", "PREFILL", "DECODE", "WATTS", "J/TOK", "RUNS"], &rows));
+    }
+    if let Some(sk) = rep["perf"]["skipped"].as_array().filter(|a| !a.is_empty()) {
+        let _ = writeln!(s, "\x1b[2mskipped (longer than the context): {}\x1b[0m", sk.iter().map(Value::to_string).collect::<Vec<_>>().join(", "));
+    }
+    let cc = &rep["perf"]["concurrency"];
+    if cc.is_object() {
+        let _ = writeln!(
+            s,
+            "{} parallel requests: {} tok/s total, {} tok/s per request while generating",
+            cc["requests"],
+            num(cc["aggregate_tps"].as_f64(), 1),
+            num(cc["per_request_decode_tps"].as_f64(), 1)
+        );
+    }
+    s.trim_end().to_owned()
+}
+
 pub fn aliases(v: &Value) -> String {
     let rows: Vec<[String; 3]> = v
         .as_array()

@@ -26,6 +26,7 @@ const GUI_ORIGINS: [&str; 4] = [
 
 use crate::catalog_api::{self, CatalogService};
 use crate::aliases::{self, Aliases};
+use crate::bench_api;
 use crate::gateway;
 use crate::install_api::{self, Installer};
 use crate::registry::Registry;
@@ -44,6 +45,10 @@ pub struct AppState {
     pub catalog: CatalogService,
     /// Models registered through the API, settings.
     pub registry: Registry,
+    /// Benchmark results.
+    pub bench: contio_bench::store::Store,
+    /// This daemon's own address, for benchmarks that go through the gateway.
+    pub self_url: String,
 }
 
 /// Everything [`AppState::start`] needs besides the sampler interval.
@@ -54,13 +59,15 @@ pub struct Services {
     pub installer: Installer,
     pub catalog: CatalogService,
     pub registry: Registry,
+    pub bench: contio_bench::store::Store,
+    pub self_url: String,
 }
 
 impl AppState {
     /// Starts a background sampler that refreshes metrics every `interval`.
     /// All WebSocket clients share this one sampler.
     pub fn start(services: Services, interval: Duration) -> Self {
-        let Services { probe, manager, aliases, installer, catalog, registry } = services;
+        let Services { probe, manager, aliases, installer, catalog, registry, bench, self_url } = services;
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
         tokio::spawn(async move {
@@ -90,6 +97,8 @@ impl AppState {
             installer,
             catalog,
             registry,
+            bench,
+            self_url,
         }
     }
 }
@@ -108,6 +117,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/models/{id}", patch(catalog_api::update_model).delete(catalog_api::remove_model))
         .route("/api/models/{id}/load", post(load_model))
         .route("/api/models/{id}/unload", post(unload_model))
+        .route("/api/bench", post(bench_api::start))
+        .route("/api/bench/runs", get(bench_api::list))
+        .route("/api/bench/runs/{id}", get(bench_api::get).delete(bench_api::delete))
+        .route("/api/bench/export", get(bench_api::export))
         .route("/api/aliases", get(aliases::list))
         .route("/api/aliases/{name}", put(aliases::put).delete(aliases::delete))
         .route("/api/catalog", get(catalog_api::overview))
@@ -242,6 +255,8 @@ mod tests {
                 data.join("cache"),
             ),
             registry: Registry::new(&data),
+            bench: contio_bench::store::Store::in_memory().unwrap(),
+            self_url: "http://127.0.0.1:9".into(),
         };
         AppState::start(services, Duration::from_secs(60))
     }

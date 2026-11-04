@@ -12,6 +12,7 @@ contio-hw.workspace = true
 contio-backends.workspace = true
 contio-install.workspace = true
 contio-catalog.workspace = true
+contio-bench.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true

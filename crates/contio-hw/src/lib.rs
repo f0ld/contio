@@ -28,6 +28,11 @@ pub enum HwError {
 
 pub type Result<T> = std::result::Result<T, HwError>;
 
+/// Watts from a hwmon power file (µW).
+pub fn read_microwatts(path: &Path) -> Option<f64> {
+    read_u64(path).ok().map(|uw| uw as f64 / 1e6)
+}
+
 /// Reads hardware state below `root`.
 #[derive(Debug, Clone)]
 pub struct HwProbe {
@@ -169,15 +174,22 @@ impl HwProbe {
 
     /// amdgpu hwmon `PPT` = SoC package power, readable without root.
     fn soc_watts(&self, dev: &Path) -> Option<f64> {
+        read_microwatts(&self.soc_power_file(dev)?)
+    }
+
+    /// The file holding SoC package power in µW, for fast repeated sampling
+    /// (benchmarks read it at 10 Hz). Read it with [`read_microwatts`].
+    pub fn soc_power_sensor(&self) -> Option<PathBuf> {
+        self.soc_power_file(&self.amd_gpu_dir()?)
+    }
+
+    fn soc_power_file(&self, dev: &Path) -> Option<PathBuf> {
         let hwmons = numbered_entries(&dev.join("hwmon"), "hwmon");
         let pick = hwmons
             .iter()
             .find(|h| read_string(&h.join("power1_label")).is_ok_and(|l| l.trim() == "PPT"))
             .or(hwmons.first())?;
-        read_u64(&pick.join("power1_input"))
-            .or_else(|_| read_u64(&pick.join("power1_average")))
-            .ok()
-            .map(|uw| uw as f64 / 1e6)
+        ["power1_input", "power1_average"].iter().map(|f| pick.join(f)).find(|p| p.is_file())
     }
 
     // --- NPU ----------------------------------------------------------------

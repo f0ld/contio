@@ -75,6 +75,10 @@ impl Instance {
         self.port
     }
 
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub fn log_path(&self) -> &Path {
         &self.log_path
     }

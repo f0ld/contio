@@ -4,6 +4,7 @@
 
 mod aliases;
 mod api;
+mod bench_api;
 mod catalog_api;
 mod config;
 mod gateway;
@@ -91,6 +92,18 @@ async fn main() -> anyhow::Result<()> {
         added_via_api = manager.managed_profiles().len(),
         "model registry loaded"
     );
+    let bench = contio_bench::store::Store::open(&data_dir.join("bench.db")).map_err(anyhow::Error::msg)?;
+    match bench.fail_interrupted() {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("{n} benchmark run(s) were cut off by the last shutdown"),
+        Err(e) => tracing::warn!("{e}"),
+    }
+    // benchmarks call the gateway like a client would
+    let self_url = if listen.ip().is_unspecified() {
+        format!("http://127.0.0.1:{}", listen.port())
+    } else {
+        format!("http://{listen}")
+    };
     let aliases = aliases::Aliases::new(config.aliases.clone(), Some(data_dir.join("aliases.json")), &manager);
     let catalog = catalog_api::CatalogService::new(
         contio_catalog::Catalog::builtin(),
@@ -110,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let state = api::AppState::start(
-        api::Services { probe, manager: manager.clone(), aliases, installer, catalog, registry },
+        api::Services { probe, manager: manager.clone(), aliases, installer, catalog, registry, bench, self_url },
         Duration::from_millis(args.metrics_interval_ms),
     );
     install_api::resume_interrupted(&state, interrupted);
