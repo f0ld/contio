@@ -77,7 +77,8 @@ button.small {
   padding: 0.15rem 0.6rem;
 }
 input,
-select {
+select,
+textarea {
   font: inherit;
   font-size: 0.9rem;
   padding: 0.3rem 0.5rem;

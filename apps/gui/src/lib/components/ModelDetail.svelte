@@ -19,6 +19,9 @@
   let loadError = $state<string | null>(null);
   let device = $state<DeviceKind>("gpu");
   let quant = $state<string | null>(null);
+  /** The user picked a quant; don't re-suggest when device or context change. */
+  let quantPicked = $state(false);
+  let refitting = $state(false);
   let npuTag = $state<string | null>(null);
   let context = $state<number | null>(null);
   let name = $state("");
@@ -45,12 +48,15 @@
     return (rev.find((q) => fitOf(q, dev)?.verdict === "fits") ?? rev.find(ok) ?? d.quants[0])?.label ?? null;
   }
 
+  const fetchDetail = (t: typeof target, ctx?: number) => ("id" in t ? fetchCatalogModel(t.id, ctx) : fetchRepo(t.repo, ctx));
+
   $effect(() => {
     const t = target;
     detail = null;
     loadError = null;
     jobId = null;
-    ("id" in t ? fetchCatalogModel(t.id) : fetchRepo(t.repo))
+    quantPicked = false;
+    fetchDetail(t)
       .then((d) => {
         detail = d;
         device = d.quants.length ? "gpu" : "npu";
@@ -61,9 +67,31 @@
       .catch((e) => (loadError = errorText(e)));
   });
 
+  // recompute the fits for a changed context (debounced while typing)
+  $effect(() => {
+    const ctx = context;
+    const d = detail;
+    if (!d || !d.quants.length || !ctx || ctx < 512 || ctx === d.fit_context) return;
+    const t = target;
+    const timer = setTimeout(async () => {
+      refitting = true;
+      try {
+        const next = await fetchDetail(t, ctx);
+        if (target !== t || context !== ctx) return;
+        detail = next;
+        if (!quantPicked && device !== "npu") quant = suggest(next, device);
+      } catch (e) {
+        loadError = errorText(e);
+      } finally {
+        refitting = false;
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  });
+
   function pickDevice(d: DeviceKind) {
     device = d;
-    if (detail && d !== "npu") quant = suggest(detail, d);
+    if (detail && d !== "npu" && !quantPicked) quant = suggest(detail, d);
   }
 
   async function install() {
@@ -149,7 +177,7 @@
           <tbody>
             {#each detail.quants as q (q.label)}
               <tr class:selected={quant === q.label}>
-                <td><input type="radio" name="quant" value={q.label} bind:group={quant} /></td>
+                <td><input type="radio" name="quant" value={q.label} bind:group={quant} onchange={() => (quantPicked = true)} /></td>
                 <td>{q.label}{#if q.recommended}<span class="tag accent">recommended</span>{/if}</td>
                 <td class="num">{formatBytes(q.size)}{q.files > 1 ? ` (${q.files} files)` : ""}</td>
                 <td class="num">{q.bits_per_weight?.toFixed(2) ?? "–"}</td>
@@ -161,14 +189,17 @@
           </tbody>
         </table>
         <p class="sub">
-          Memory at {formatContext(detail.default_context)} context{detail.mmproj ? `, vision projector included (${formatBytes(detail.mmproj.size)})` : ""}.
+          Memory at {formatContext(detail.fit_context)} context{refitting ? " (updating…)" : ""}{detail.mmproj ? `, vision projector included (${formatBytes(detail.mmproj.size)})` : ""}.
           Fit compares against {device === "cpu" ? "system" : "GPU"} memory minus the reserve.
         </p>
       {/if}
 
       {#if devices.length}
         <div class="row options">
-          <label>Context <input type="number" min="512" step="1024" bind:value={context} /></label>
+          <label>
+            Context <input type="number" min="512" max={detail.context_length ?? undefined} step="1024" bind:value={context} />
+            {#if detail.context_length}<span class="sub">max {formatContext(detail.context_length)}</span>{/if}
+          </label>
           <label>API name <input placeholder="automatic" bind:value={name} /></label>
           <label><input type="checkbox" bind:checked={run} /> start when done</label>
           <button class="primary" disabled={!!job && job.state === "running"} onclick={install}>
@@ -191,7 +222,8 @@
           {#if job.state === "done"}
             <p>
               Installed as <code>{String(job.result?.model ?? "")}</code>. Use that name as <code>model</code> in the
-              API, or manage it on the <a href="/">dashboard</a>.
+              API{#if job.result?.kind === "chat"}, <a href="/playground?model={encodeURIComponent(String(job.result?.model ?? ""))}">try it in the
+                playground</a>{/if}, or manage it on the <a href="/">dashboard</a>.
             </p>
           {/if}
           {#if job.error}<p class="error-text">{job.error}</p>{/if}

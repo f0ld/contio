@@ -2,6 +2,7 @@
 //!
 //! Owns all state; the GUI and CLI are thin clients of its management API.
 
+mod aliases;
 mod api;
 mod catalog_api;
 mod config;
@@ -73,6 +74,10 @@ async fn main() -> anyhow::Result<()> {
 
     let data_dir = config::default_data_dir();
     let (installer, interrupted) = install_api::Installer::persistent(data_dir.clone(), hw.cpu.cores);
+    let orphans = contio_backends::stop_orphans(&config::default_log_dir());
+    if !orphans.is_empty() {
+        tracing::warn!(?orphans, "stopped backends a previous contiod left running");
+    }
     let manager = build_manager(&config, &hw);
     if let Some(f) = &config.backends.flm {
         installer.set_flm(flm_config(f));
@@ -85,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
         added_via_api = manager.managed_profiles().len(),
         "model registry loaded"
     );
+    let aliases = aliases::Aliases::new(config.aliases.clone(), Some(data_dir.join("aliases.json")), &manager);
     let catalog = catalog_api::CatalogService::new(
         contio_catalog::Catalog::builtin(),
         installer.http.clone(),
@@ -103,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let state = api::AppState::start(
-        api::Services { probe, manager: manager.clone(), aliases: config.aliases.clone(), installer, catalog, registry },
+        api::Services { probe, manager: manager.clone(), aliases, installer, catalog, registry },
         Duration::from_millis(args.metrics_interval_ms),
     );
     install_api::resume_interrupted(&state, interrupted);
@@ -113,14 +119,25 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("listening on http://{listen} (OpenAI API at http://{listen}/v1)");
 
     axum::serve(listener, api::router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("shutting down");
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
     reaper.abort();
     manager.shutdown().await;
     Ok(())
+}
+
+/// Ctrl-C, SIGTERM (systemd, `kill`) or SIGHUP (terminal closed): all stop
+/// the backends in order.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("installing SIGTERM handler");
+    let mut hup = signal(SignalKind::hangup()).expect("installing SIGHUP handler");
+    let name = tokio::select! {
+        _ = tokio::signal::ctrl_c() => "SIGINT",
+        _ = term.recv() => "SIGTERM",
+        _ = hup.recv() => "SIGHUP",
+    };
+    tracing::info!("{name}: shutting down");
 }
 
 fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {

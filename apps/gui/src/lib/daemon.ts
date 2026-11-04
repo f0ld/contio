@@ -1,6 +1,7 @@
 // Thin client for the contiod management API (spec §7.4).
 
 import type {
+  Alias,
   BackendId,
   BackendsInfo,
   CatalogOverview,
@@ -10,6 +11,7 @@ import type {
   Job,
   Metrics,
   ModelDetail,
+  ModelPatch,
   ModelStatus,
   PreflightResult,
   RepoInfo,
@@ -50,16 +52,23 @@ export const unloadModel = (id: string) =>
 export const removeModel = (id: string, deleteFiles: boolean) =>
   send<{ removed: string; deleted_files: string[] }>(`/api/models/${enc(id)}?delete_files=${deleteFiles}`, "DELETE");
 
-export const updateModel = (id: string, patch: { context?: number; pinned?: boolean; device?: "gpu" | "cpu" }) =>
-  send<ModelStatus>(`/api/models/${enc(id)}`, "PATCH", patch);
+export const updateModel = (id: string, patch: ModelPatch) => send<ModelStatus>(`/api/models/${enc(id)}`, "PATCH", patch);
+
+export const fetchAliases = () => request<Alias[]>("/api/aliases");
+
+export const setAlias = (name: string, model: string) => send<Alias>(`/api/aliases/${enc(name)}`, "PUT", { model });
+
+export const deleteAlias = (name: string) => send<Alias>(`/api/aliases/${enc(name)}`, "DELETE");
 
 // --- catalog ---
 
 export const fetchCatalog = (refresh = false) => request<CatalogOverview>(`/api/catalog?refresh=${refresh}`);
 
-export const fetchCatalogModel = (id: string) => request<ModelDetail>(`/api/catalog/models/${enc(id)}`);
+export const fetchCatalogModel = (id: string, context?: number) =>
+  request<ModelDetail>(`/api/catalog/models/${enc(id)}${context ? `?context=${context}` : ""}`);
 
-export const fetchRepo = (repo: string) => request<ModelDetail>(`/api/catalog/repo?repo=${enc(repo)}`);
+export const fetchRepo = (repo: string, context?: number) =>
+  request<ModelDetail>(`/api/catalog/repo?repo=${enc(repo)}${context ? `&context=${context}` : ""}`);
 
 export const searchHf = (q: string) => request<RepoInfo[]>(`/api/catalog/search?q=${enc(q)}`);
 

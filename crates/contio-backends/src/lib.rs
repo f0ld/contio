@@ -17,7 +17,7 @@ use contio_core::model::ModelProfile;
 use tokio::process::Command;
 
 pub use flm::{FlmBackend, FlmConfig};
-pub use instance::Instance;
+pub use instance::{Instance, stop_orphans};
 pub use llamacpp::{LlamaCppBackend, LlamaCppConfig, LlamaRuntime};
 pub use manager::{Lease, ManagerConfig, ModelManager};
 

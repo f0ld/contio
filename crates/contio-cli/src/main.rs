@@ -53,7 +53,12 @@ enum Command {
     },
     /// Quantizations of a model with sizes and fit: catalog id, `owner/repo`
     /// or `flm:<tag>`.
-    Show { model: String },
+    Show {
+        model: String,
+        /// Compute memory fits for this context length (tokens).
+        #[arg(short, long)]
+        context: Option<u32>,
+    },
     /// Download and register a model; installs a missing backend first.
     Install {
         /// Catalog id, Hugging Face `owner/repo`, or `flm:<tag>` (NPU).
@@ -120,6 +125,11 @@ enum Command {
         #[arg(long)]
         show_reasoning: bool,
     },
+    /// Other names for models: list, set, remove.
+    Alias {
+        #[command(subcommand)]
+        action: Option<AliasAction>,
+    },
     /// Inference backends: list, install, check prerequisites.
     Backends {
         #[command(subcommand)]
@@ -131,6 +141,22 @@ enum Command {
     Cancel { id: u64 },
     /// Run a failed or cancelled job again.
     Retry { id: u64 },
+}
+
+#[derive(Debug, Subcommand)]
+enum AliasAction {
+    /// All aliases (default).
+    List,
+    /// Create or retarget an alias: `contio alias set coder qwen3.6-35b-a3b`.
+    Set {
+        name: String,
+        model: String,
+        /// Model name sent to the backend (models co-loaded in one process).
+        #[arg(long)]
+        upstream_model: Option<String>,
+    },
+    /// Remove an alias (only ones added through contio).
+    Rm { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -239,11 +265,14 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 if cli.json { println!("{raw}") } else { println!("{}", format::catalog(&raw, &filter)) }
             }
         }
-        Command::Show { model } => {
+        Command::Show { model, context } => {
+            let ctx = context.map(|c| format!("context={c}"));
             let raw = if model.contains('/') {
-                client.get(&format!("/api/catalog/repo?repo={}", urlencode(&model))).await?
+                let q = ctx.map(|c| format!("&{c}")).unwrap_or_default();
+                client.get(&format!("/api/catalog/repo?repo={}{q}", urlencode(&model))).await?
             } else {
-                client.get(&format!("/api/catalog/models/{}", urlencode(&model))).await?
+                let q = ctx.map(|c| format!("?{c}")).unwrap_or_default();
+                client.get(&format!("/api/catalog/models/{}{q}", urlencode(&model))).await?
             };
             if cli.json { println!("{raw}") } else { println!("{}", format::detail(&raw)) }
         }
@@ -273,6 +302,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let r = client.delete(&format!("/api/models/{}?delete_files={delete_files}", urlencode(&model))).await?;
             let deleted = r["deleted_files"].as_array().map_or(0, Vec::len);
             eprintln!("removed {model}{}", if delete_files { format!(" ({deleted} files deleted)") } else { String::new() });
+            let aliases = format::strings(&r["removed_aliases"]);
+            if !aliases.is_empty() {
+                eprintln!("removed its aliases: {}", aliases.join(", "));
+            }
         }
         Command::Set { model, context, pin, unpin, device, idle_ttl } => {
             let pinned = if pin { Some(true) } else if unpin { Some(false) } else { None };
@@ -284,6 +317,21 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             client.patch(&format!("/api/models/{}", urlencode(&model)), &body).await?;
             eprintln!("updated {model} (restarts on next use if it was loaded)");
         }
+        Command::Alias { action } => match action.unwrap_or(AliasAction::List) {
+            AliasAction::List => {
+                let raw = client.get("/api/aliases").await?;
+                if cli.json { println!("{raw}") } else { println!("{}", format::aliases(&raw)) }
+            }
+            AliasAction::Set { name, model, upstream_model } => {
+                let body = json!({ "model": model, "upstream_model": upstream_model });
+                client.send(client.http.put(format!("{}/api/aliases/{}", client.base, urlencode(&name))).json(&body)).await?;
+                eprintln!("{name} → {model}");
+            }
+            AliasAction::Rm { name } => {
+                client.delete(&format!("/api/aliases/{}", urlencode(&name))).await?;
+                eprintln!("removed alias {name}");
+            }
+        },
         Command::Backends { action } => match action.unwrap_or(BackendsAction::List) {
             BackendsAction::List => {
                 let raw = client.get("/api/backends").await?;

@@ -158,9 +158,12 @@ pub struct ModelStatus {
     /// Registered through the API (removable), as opposed to `config.toml`.
     pub managed: bool,
     pub origin: Option<ModelOrigin>,
+    pub source: ModelSource,
     pub pool: MemoryPoolKind,
     pub backend: Option<String>,
     pub pinned: bool,
+    pub idle_ttl_secs: Option<u64>,
+    pub extra_args: Vec<String>,
     /// Estimated resident size used for pool budgeting.
     pub estimated_bytes: Option<u64>,
     #[serde(flatten)]
@@ -204,9 +207,12 @@ mod tests {
             context: None,
             managed: false,
             origin: None,
+            source: ModelSource::Flm { tag: "t".into() },
             pool: MemoryPoolKind::Gpu,
             backend: Some("llama.cpp".into()),
             pinned: false,
+            idle_ttl_secs: None,
+            extra_args: vec![],
             estimated_bytes: Some(1),
             state: ModelState::Ready { port: 4242 },
             in_flight: 0,

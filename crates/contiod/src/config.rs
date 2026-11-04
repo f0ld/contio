@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use contio_core::model::{ModelProfile, ModelSource};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -22,7 +22,7 @@ pub struct Config {
 /// Another name for a model, e.g. `coder` → `qwen3.6-35b-a3b` (spec §7.2).
 /// `upstream_model` overrides the name sent to the backend, which reaches
 /// models co-loaded in one process (FLM's embedding model next to an LLM).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Alias {
     pub name: String,

@@ -152,9 +152,7 @@ pub async fn models(State(state): State<AppState>) -> Json<Value> {
             })
         })
         .collect();
-    let mut aliases: Vec<_> = state.aliases.values().collect();
-    aliases.sort_by(|a, b| a.name.cmp(&b.name));
-    for a in aliases {
+    for a in state.aliases.list() {
         data.push(json!({
             "id": a.name, "object": "model", "created": 0, "owned_by": "contio",
             "contio": { "alias_of": a.model }

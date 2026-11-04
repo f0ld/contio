@@ -46,6 +46,9 @@ impl Instance {
             .process_group(0);
 
         let child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+        if let Some(pid) = child.id() {
+            write_pid_file(&pid_file(log_path), pid);
+        }
         let mut instance = Self { child, port, log_path: log_path.to_owned() };
         let url = format!("http://127.0.0.1:{port}{health_path}");
         let deadline = StdInstant::now() + timeout;
@@ -98,6 +101,60 @@ impl Instance {
         let all: Vec<&str> = text.lines().collect();
         all[all.len().saturating_sub(lines)..].join("\n")
     }
+}
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        // the process is stopped, gone, or killed by `kill_on_drop` right now
+        let _ = std::fs::remove_file(pid_file(&self.log_path));
+    }
+}
+
+/// Backends write `<log>.pid`: the pid and the process's command line, so a
+/// daemon that was killed hard (`kill -9`, crash) can stop its leftovers on
+/// the next start without touching a process that reused the pid.
+fn pid_file(log_path: &Path) -> PathBuf {
+    log_path.with_extension("pid")
+}
+
+fn write_pid_file(path: &Path, pid: u32) {
+    // spawn returns after exec, so this is the backend's command line
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    let mut content = format!("{pid}\n").into_bytes();
+    content.extend_from_slice(&cmdline);
+    if let Err(e) = std::fs::write(path, content) {
+        tracing::warn!("writing {}: {e}", path.display());
+    }
+}
+
+/// Stop backend processes left running by a previous daemon. Returns their pids.
+pub fn stop_orphans(log_dir: &Path) -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir(log_dir) else { return vec![] };
+    let mut stopped = Vec::new();
+    for path in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "pid")) {
+        let content = std::fs::read(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        let Some(nl) = content.iter().position(|&b| b == b'\n') else { continue };
+        let Ok(pid) = std::str::from_utf8(&content[..nl]).unwrap_or_default().parse::<u32>() else { continue };
+        let recorded = &content[nl + 1..];
+        let running = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        if recorded.is_empty() || running != recorded {
+            continue; // gone, or the pid now belongs to something else
+        }
+        tracing::warn!(pid, file = %path.display(), "stopping a backend left over from a previous run");
+        // its own process group (see `spawn`): also reaches podman's children
+        let group = Pid::from_raw(-(pid as i32));
+        let _ = kill(group, Signal::SIGTERM);
+        let deadline = StdInstant::now() + STOP_GRACE;
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() && StdInstant::now() < deadline {
+            std::thread::sleep(POLL);
+        }
+        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            let _ = kill(group, Signal::SIGKILL);
+        }
+        stopped.push(pid);
+    }
+    stopped
 }
 
 /// An unused localhost port. Racy by nature (the port is released before the

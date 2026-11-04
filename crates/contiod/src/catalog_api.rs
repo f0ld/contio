@@ -57,7 +57,7 @@ pub struct QuantView {
     pub files: usize,
     pub bits_per_weight: Option<f32>,
     pub tier: Option<&'static str>,
-    /// At the model's default context, projector included.
+    /// At `ModelDetail::fit_context`, projector included.
     pub fit: DeviceFits,
     pub recommended: bool,
     /// All files are on disk.
@@ -93,6 +93,8 @@ pub struct ModelDetail {
     pub active_b: Option<f32>,
     pub context_length: Option<u32>,
     pub default_context: u32,
+    /// The context the quant fits were computed for.
+    pub fit_context: u32,
     pub capabilities: Vec<String>,
     pub notes: Option<String>,
     pub recommended: Option<String>,
@@ -264,17 +266,23 @@ fn suggested<'a>(views: &'a [QuantView], device: DeviceKind) -> Option<&'a Quant
         .or_else(|| views.iter().rev().find(fits))
 }
 
-fn detail_for(ctx: &Context, m: &CatalogModel, listing: Result<RepoListing, String>) -> ModelDetail {
+/// `requested` (clamped to 512..=the model's maximum), else `default`.
+fn fit_context(requested: Option<u32>, default: u32, max: Option<u32>) -> u32 {
+    requested.map_or(default, |c| c.clamp(512, max.unwrap_or(u32::MAX).max(512)))
+}
+
+fn detail_for(ctx: &Context, m: &CatalogModel, listing: Result<RepoListing, String>, context: Option<u32>) -> ModelDetail {
     let g = m.geometry.as_ref();
     let (listing, error) = match listing {
         Ok(l) => (l, None),
         Err(e) => (RepoListing::default(), Some(e)),
     };
     let mmproj = listing.preferred_mmproj().cloned();
+    let max = g.and_then(|g| g.context_length);
     let info = ModelInfo {
         kv: g.map(|g| &g.kv),
         params: g.and_then(|g| g.params),
-        context: m.default_context(),
+        context: fit_context(context, m.default_context(), max),
         mmproj_size: mmproj.as_ref().map_or(0, |f| f.size),
     };
     ModelDetail {
@@ -285,8 +293,9 @@ fn detail_for(ctx: &Context, m: &CatalogModel, listing: Result<RepoListing, Stri
         kind: m.kind,
         params: info.params,
         active_b: m.active_b,
-        context_length: g.and_then(|g| g.context_length),
-        default_context: info.context,
+        context_length: max,
+        default_context: m.default_context(),
+        fit_context: info.context,
         capabilities: m.capabilities(mmproj.is_some()),
         notes: m.notes.clone(),
         recommended: m.recommended.clone(),
@@ -308,6 +317,7 @@ fn npu_detail(ctx: &Context, f: &FlmModel) -> ModelDetail {
         active_b: None,
         context_length: f.default_context,
         default_context: f.default_context.unwrap_or(8192),
+        fit_context: f.default_context.unwrap_or(8192),
         capabilities: f.capabilities(),
         notes: f.repo_url.clone(),
         recommended: None,
@@ -379,7 +389,7 @@ pub async fn overview(State(state): State<AppState>, Query(q): Query<RefreshQuer
         .catalog
         .models
         .iter()
-        .map(|m| summary(detail_for(&ctx, m, listings.get(&m.repo).cloned().unwrap_or_else(|| Err("not listed".into())))))
+        .map(|m| summary(detail_for(&ctx, m, listings.get(&m.repo).cloned().unwrap_or_else(|| Err("not listed".into())), None)))
         .collect();
     let mut families = svc.catalog.families.clone();
     let npu_only: Vec<ModelSummary> = ctx.unlinked_flm(&svc.catalog).map(|f| summary(npu_detail(&ctx, f))).collect();
@@ -396,8 +406,19 @@ pub async fn overview(State(state): State<AppState>, Query(q): Query<RefreshQuer
     Json(Overview { families, models, npu_available: !ctx.flm.is_empty() }).into_response()
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct DetailQuery {
+    /// Compute the fits for this context instead of the default.
+    #[serde(default)]
+    pub context: Option<u32>,
+}
+
 /// A curated model (`qwen3-8b`) or an NPU-only one (`flm:<tag>`).
-pub async fn model_detail(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Response {
+pub async fn model_detail(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Query(q): Query<DetailQuery>,
+) -> Response {
     let ctx = Context::new(&state);
     if let Some(tag) = id.strip_prefix("flm:") {
         return match ctx.flm_model(tag) {
@@ -407,7 +428,7 @@ pub async fn model_detail(State(state): State<AppState>, UrlPath(id): UrlPath<St
     }
     let Some(m) = state.catalog.catalog.model(&id) else { return not_found(&format!("`{id}` is not in the catalog")) };
     let listing = state.catalog.hf.listing(&m.repo, LISTING_TTL).await;
-    Json(detail_for(&ctx, m, listing)).into_response()
+    Json(detail_for(&ctx, m, listing, q.context)).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -428,6 +449,8 @@ pub async fn search(State(state): State<AppState>, Query(q): Query<SearchQuery>)
 #[derive(Debug, Deserialize)]
 pub struct RepoQuery {
     pub repo: String,
+    #[serde(default)]
+    pub context: Option<u32>,
 }
 
 /// Detail view for any Hugging Face GGUF repo. Without a GGUF header read, the
@@ -438,11 +461,11 @@ pub async fn repo_detail(State(state): State<AppState>, Query(q): Query<RepoQuer
     }
     // a curated repo gets the curated view
     if let Some(m) = state.catalog.catalog.models.iter().find(|m| m.repo == q.repo) {
-        return model_detail(State(state.clone()), UrlPath(m.id.clone())).await;
+        return model_detail(State(state.clone()), UrlPath(m.id.clone()), Query(DetailQuery { context: q.context })).await;
     }
     let (info, listing) = tokio::join!(state.catalog.hf.info(&q.repo), state.catalog.hf.listing(&q.repo, LISTING_TTL));
     let ctx = Context::new(&state);
-    Json(repo_view(&ctx, &q.repo, info, listing)).into_response()
+    Json(repo_view(&ctx, &q.repo, info, listing, q.context)).into_response()
 }
 
 fn repo_view(
@@ -450,6 +473,7 @@ fn repo_view(
     repo: &str,
     info: Result<RepoInfo, String>,
     listing: Result<RepoListing, String>,
+    requested: Option<u32>,
 ) -> ModelDetail {
     let info = info.ok();
     let (listing, error) = match listing {
@@ -458,11 +482,11 @@ fn repo_view(
     };
     let mmproj = listing.preferred_mmproj().cloned();
     let max = info.as_ref().and_then(|i| i.context_length);
-    let context = max.unwrap_or(u32::MAX).min(contio_core::model::DEFAULT_CONTEXT);
+    let default = max.unwrap_or(u32::MAX).min(contio_core::model::DEFAULT_CONTEXT);
     let model = ModelInfo {
         kv: None,
         params: info.as_ref().and_then(|i| i.params),
-        context,
+        context: fit_context(requested, default, max),
         mmproj_size: mmproj.as_ref().map_or(0, |f| f.size),
     };
     let mut caps = Vec::new();
@@ -489,7 +513,8 @@ fn repo_view(
         params: model.params,
         active_b: None,
         context_length: max,
-        default_context: context,
+        default_context: default,
+        fit_context: model.context,
         capabilities: caps,
         notes: Some("Community upload, not curated by contio.".into()),
         recommended: None,
@@ -542,7 +567,7 @@ pub async fn install(State(state): State<AppState>, Json(req): Json<InstallModel
 }
 
 /// Model ids: what clients send in the `model` field.
-fn valid_id(id: &str) -> bool {
+pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -654,8 +679,8 @@ async fn install_gguf(
         (None, None) => {
             let ctx_view = Context::new(state);
             let detail = match entry {
-                Some(e) => detail_for(&ctx_view, e, Ok(listing.clone())),
-                None => repo_view(&ctx_view, &repo, hf.info(&repo).await, Ok(listing.clone())),
+                Some(e) => detail_for(&ctx_view, e, Ok(listing.clone()), None),
+                None => repo_view(&ctx_view, &repo, hf.info(&repo).await, Ok(listing.clone()), None),
             };
             let pick = suggested(&detail.quants, device).ok_or("no quantization fits this machine")?.label.clone();
             ctx.log(&format!("picked {pick}"));
@@ -751,7 +776,7 @@ fn register(
         ctx.log(&format!("already registered as `{}`", same.id));
         return Ok(same.clone());
     }
-    let taken = |id: &str| existing.iter().any(|p| p.id == id);
+    let taken = |id: &str| existing.iter().any(|p| p.id == id) || state.aliases.contains(id);
     profile.id = match wanted {
         Some(id) if taken(id) => return Err(format!("a model named `{id}` already exists")),
         Some(id) => id.to_owned(),
@@ -795,8 +820,9 @@ pub async fn remove_model(
         Err(e) => return crate::gateway::backend_error(&e),
     };
     state.registry.save_models(&state.manager);
+    let aliases = state.aliases.remove_for_model(&id);
     let deleted = if q.delete_files { delete_files(&state.manager, &state.installer.models_dir(), &removed) } else { vec![] };
-    Json(json!({ "removed": id, "deleted_files": deleted })).into_response()
+    Json(json!({ "removed": id, "deleted_files": deleted, "removed_aliases": aliases })).into_response()
 }
 
 fn delete_files(manager: &ModelManager, models_dir: &Path, removed: &ModelProfile) -> Vec<PathBuf> {

@@ -335,9 +335,12 @@ impl ModelManager {
                     context: p.context,
                     managed: r.managed,
                     origin: p.origin.clone(),
+                    source: p.source.clone(),
                     pool: p.pool(),
                     backend: backend.as_ref().map(|b| b.name().to_owned()),
                     pinned: p.pinned,
+                    idle_ttl_secs: p.idle_ttl_secs,
+                    extra_args: p.extra_args.clone(),
                     estimated_bytes: slot
                         .and_then(|s| s.estimate)
                         .or_else(|| backend.and_then(|b| b.estimate_bytes(p))),

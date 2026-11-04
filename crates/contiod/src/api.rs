@@ -1,15 +1,13 @@
 //! HTTP surface of the daemon: management API (`/api/*`) and the
 //! OpenAI-compatible gateway (`/v1/*`, see `gateway.rs`).
 
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use contio_backends::ModelManager;
 use contio_core::hw::{HardwareInfo, Metrics};
@@ -27,7 +25,7 @@ const GUI_ORIGINS: [&str; 4] = [
 ];
 
 use crate::catalog_api::{self, CatalogService};
-use crate::config::Alias;
+use crate::aliases::{self, Aliases};
 use crate::gateway;
 use crate::install_api::{self, Installer};
 use crate::registry::Registry;
@@ -39,7 +37,7 @@ pub struct AppState {
     pub manager: ModelManager,
     /// Client for backend requests (no overall timeout: generations can be long).
     pub http: reqwest::Client,
-    pub aliases: Arc<HashMap<String, Alias>>,
+    pub aliases: Aliases,
     /// Conversations for the Responses API's `previous_response_id`.
     pub responses: gateway::responses::Store,
     pub installer: Installer,
@@ -52,7 +50,7 @@ pub struct AppState {
 pub struct Services {
     pub probe: HwProbe,
     pub manager: ModelManager,
-    pub aliases: Vec<Alias>,
+    pub aliases: Aliases,
     pub installer: Installer,
     pub catalog: CatalogService,
     pub registry: Registry,
@@ -87,7 +85,7 @@ impl AppState {
             metrics: rx,
             manager,
             http: reqwest::Client::new(),
-            aliases: Arc::new(aliases.into_iter().map(|a| (a.name.clone(), a)).collect()),
+            aliases,
             responses: gateway::responses::Store::default(),
             installer,
             catalog,
@@ -110,6 +108,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/models/{id}", patch(catalog_api::update_model).delete(catalog_api::remove_model))
         .route("/api/models/{id}/load", post(load_model))
         .route("/api/models/{id}/unload", post(unload_model))
+        .route("/api/aliases", get(aliases::list))
+        .route("/api/aliases/{name}", put(aliases::put).delete(aliases::delete))
         .route("/api/catalog", get(catalog_api::overview))
         .route("/api/catalog/models/{id}", get(catalog_api::model_detail))
         .route("/api/catalog/search", get(catalog_api::search))
@@ -224,8 +224,8 @@ mod tests {
         let data = std::env::temp_dir().join("contio-api-test-unused");
         let services = Services {
             probe,
+            aliases: Aliases::new(vec![], None, &manager),
             manager,
-            aliases: vec![],
             installer: Installer::in_memory(data.clone(), 4),
             catalog: CatalogService::new(
                 contio_catalog::Catalog::default(),

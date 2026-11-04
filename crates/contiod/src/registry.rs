@@ -89,14 +89,14 @@ impl Registry {
     }
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
+pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes)
         .map_err(|e| tracing::warn!("ignoring unreadable {}: {e}", path.display()))
         .ok()
 }
 
-fn write_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
+pub fn write_json(path: &Path, value: &impl Serialize) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

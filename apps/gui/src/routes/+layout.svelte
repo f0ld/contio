@@ -19,6 +19,7 @@
 
   const links = [
     { href: "/", label: "Dashboard" },
+    { href: "/playground", label: "Playground" },
     { href: "/catalog", label: "Catalog" },
     { href: "/jobs", label: "Jobs" },
     { href: "/backends", label: "Backends" },

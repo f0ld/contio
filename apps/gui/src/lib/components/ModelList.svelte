@@ -1,11 +1,24 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { errorText, fetchModels, formatBytes, formatContext, loadModel, removeModel, unloadModel } from "$lib/daemon";
-  import type { ModelStatus } from "$lib/types";
+  import {
+    errorText,
+    fetchAliases,
+    fetchModels,
+    formatBytes,
+    formatContext,
+    loadModel,
+    removeModel,
+    unloadModel,
+  } from "$lib/daemon";
+  import ModelEditor from "./ModelEditor.svelte";
+  import type { Alias, ModelStatus } from "$lib/types";
 
   let { online }: { online: boolean } = $props();
 
   let models = $state<ModelStatus[]>([]);
+  let aliases = $state<Alias[]>([]);
+  /** Model whose editor is open. */
+  let editing = $state<string | null>(null);
   let busy = $state<Record<string, "loading" | "unloading" | "removing">>({});
   let errors = $state<Record<string, string>>({});
   /** Model whose remove confirmation is open. */
@@ -14,7 +27,7 @@
 
   async function refresh() {
     try {
-      models = await fetchModels();
+      [models, aliases] = await Promise.all([fetchModels(), fetchAliases()]);
     } catch {
       // connection state is shown in the header; keep the last list
     }
@@ -69,6 +82,7 @@
               <span class="id">{m.id}</span>
               {#if m.pinned}<span class="tag accent">pinned</span>{/if}
               {#if m.kind !== "chat"}<span class="tag">{m.kind}</span>{/if}
+              {#each aliases.filter((a) => a.model === m.id) as a (a.name)}<span class="tag" title="alias">= {a.name}</span>{/each}
               <div class="sub">
                 {m.backend ?? "no backend"}{m.origin?.quant && m.origin.quant !== "none" ? ` · ${m.origin.quant}` : ""}{m.managed ? "" : " · config.toml"}
               </div>
@@ -86,12 +100,21 @@
                 <button disabled={!online || !!action || m.state === "loading" || !m.backend}
                         onclick={() => act(m.id, "loading")}>Load</button>
               {/if}
+              <button disabled={!online} class:primary={editing === m.id}
+                      onclick={() => { editing = editing === m.id ? null : m.id; confirming = null; }}>Edit</button>
               {#if m.managed}
                 <button class="danger" title="Remove" disabled={!online || !!action}
-                        onclick={() => { confirming = confirming === m.id ? null : m.id; deleteFiles = false; }}>✕</button>
+                        onclick={() => { confirming = confirming === m.id ? null : m.id; deleteFiles = false; editing = null; }}>✕</button>
               {/if}
             </td>
           </tr>
+          {#if editing === m.id}
+            <tr class="edit-row">
+              <td colspan="6">
+                <ModelEditor model={m} {aliases} onchange={refresh} onclose={() => (editing = null)} />
+              </td>
+            </tr>
+          {/if}
           {#if confirming === m.id}
             <tr class="confirm-row">
               <td colspan="6">
@@ -146,6 +169,10 @@
   .actions button {
     font-size: 0.85rem;
     padding: 0.2rem 0.7rem;
+  }
+  .edit-row td {
+    border-top: none;
+    background: var(--bg);
   }
   .confirm-row td {
     border-top: none;

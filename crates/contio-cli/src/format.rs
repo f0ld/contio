@@ -89,7 +89,7 @@ fn params(v: &Value) -> String {
     }
 }
 
-fn strings(v: &Value) -> Vec<&str> {
+pub fn strings(v: &Value) -> Vec<&str> {
     v.as_array().into_iter().flatten().filter_map(Value::as_str).collect()
 }
 
@@ -168,6 +168,26 @@ fn indent(s: &str) -> String {
     s.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n")
 }
 
+pub fn aliases(v: &Value) -> String {
+    let rows: Vec<[String; 3]> = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            let mut target = a["model"].as_str().unwrap_or_default().to_owned();
+            if let Some(u) = a["upstream_model"].as_str() {
+                target.push_str(&format!(" (as {u})"));
+            }
+            let from = if a["managed"] == true { "" } else { "config.toml" };
+            [a["name"].as_str().unwrap_or_default().to_owned(), target, from.to_owned()]
+        })
+        .collect();
+    if rows.is_empty() {
+        return "no aliases (add one with `contio alias set <name> <model>`)".into();
+    }
+    table(&["ALIAS", "MODEL", ""], &rows)
+}
+
 pub fn detail(d: &Value) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "\x1b[1m{}\x1b[0m  {}", d["name"].as_str().unwrap_or_default(), d["repo"].as_str().unwrap_or_default());
@@ -226,7 +246,9 @@ pub fn detail(d: &Value) -> String {
         })
         .collect();
     if !rows.is_empty() {
-        let _ = writeln!(s, "\n{}", table(&["QUANT", "SIZE", "BPW", "QUALITY", "GPU (needs)", "CPU (needs)", ""], &rows));
+        let at = d["fit_context"].as_u64().map_or(String::new(), |c| format!(" @{}k", c / 1024));
+        let (gpu, cpu) = (format!("GPU (needs{at})"), format!("CPU (needs{at})"));
+        let _ = writeln!(s, "\n{}", table(&["QUANT", "SIZE", "BPW", "QUALITY", &gpu, &cpu, ""], &rows));
         if let Some(m) = d["mmproj"]["path"].as_str() {
             let _ = writeln!(s, "\x1b[2mvision projector {m} ({}) is included in sizes and installs\x1b[0m", gib(d["mmproj"]["size"].as_u64().unwrap_or(0)));
         }
@@ -494,9 +516,12 @@ mod tests {
             context: Some(32768),
             managed: id != "a",
             origin: None,
+            source: contio_core::model::ModelSource::Flm { tag: id.into() },
             pool: MemoryPoolKind::Gpu,
             backend: Some("llama.cpp".into()),
             pinned: id == "a",
+            idle_ttl_secs: None,
+            extra_args: vec![],
             estimated_bytes: Some(24 * 1024 * 1024 * 1024),
             state,
             in_flight: 0,

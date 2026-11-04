@@ -74,6 +74,8 @@ export type ModelState =
   | { state: "ready"; port: number }
   | { state: "failed"; error: string };
 
+export type ModelSource = { format: "gguf"; path: string; mmproj?: string } | { format: "flm"; tag: string };
+
 export type ModelStatus = {
   id: string;
   device: DeviceKind;
@@ -82,12 +84,33 @@ export type ModelStatus = {
   /** Installed through contio (removable); false for config.toml models. */
   managed: boolean;
   origin: ModelOrigin | null;
+  source: ModelSource;
   pool: MemoryPoolKind;
   backend: string | null;
   pinned: boolean;
+  idle_ttl_secs: number | null;
+  extra_args: string[];
   estimated_bytes: number | null;
   in_flight: number;
 } & ModelState;
+
+// Mirrors crates/contiod/src/aliases.rs.
+export interface Alias {
+  name: string;
+  model: string;
+  upstream_model: string | null;
+  /** Added through contio; false for config.toml aliases (read-only). */
+  managed: boolean;
+}
+
+export interface ModelPatch {
+  context?: number;
+  pinned?: boolean;
+  /** 0 = daemon default. */
+  idle_ttl_secs?: number;
+  device?: "gpu" | "cpu";
+  extra_args?: string[];
+}
 
 // Mirrors crates/contiod/src/catalog_api.rs.
 export type Verdict = "fits" | "tight" | "too_big";
@@ -139,6 +162,8 @@ export interface ModelDetail {
   active_b: number | null;
   context_length: number | null;
   default_context: number;
+  /** Context the quant fits were computed for. */
+  fit_context: number;
   capabilities: string[];
   notes: string | null;
   recommended: string | null;
