@@ -386,11 +386,13 @@ contio serve                            # run daemon in foreground
 - [x] GUI Benchmarks page: run form (models, suites, preset, power profile), bar charts per metric (latest run per model), speed-vs-tool-calling scatter, pass rate per quality suite, all runs with detail (per prompt length / per case or item with first failure), CSV/JSON export.
 - [x] Measured results feed the catalog: installed quants show their latest speed, tool-calling pass rate and agent-ready badge (install dialog, `contio show`).
 - [x] Robustness: cancelling a benchmark drops its in-flight request (the backend stops generating); shutdown cancels benchmark jobs and gives open requests 10 s; orphan cleanup skips backends whose parent contiod is still alive.
-- [ ] Embedding, reranker and Whisper (WER) quality; custom prompt sets; arena with Elo; LLM-as-judge
+- [x] Retrieval suite for embedding and reranker models (`registry/bench/retrieval.json`, written for contio): 24 paraphrased queries over 48 documents, half of them same-topic distractors; recall@1 and MRR. nomic-embed-text-v1.5 and Qwen3 Reranker 0.6B: 92% / MRR 0.96 each (an easier first version without distractors gave 100% for both).
+- [ ] Whisper (WER) quality; custom prompt sets; arena with Elo; LLM-as-judge
 - [ ] Quant-ladder and device-comparison views; "thinking off" variant
 
 Findings so far:
 - llama.cpp rejects requests that combine `tools` with a `response_format` schema ("failed to parse grammar"); FastFlowLM accepts them. The gateway could drop the schema grammar or validate afterwards (M5).
+- Reasoning (quick, 4096 tokens): Qwen3.5 4B 65%; every failure was a cut-off, every finished answer was right. The model reaches the answer and then keeps second-guessing it (not a loop). Qwen's recommended sampling (temp 0.6, top-k 20, presence penalty 1.5) gave the same score, so the budget, not sampling, decides quick scores; standard uses 8192 tokens.
 - Tool calling (quick): Qwen3.5 4B 100% (agent-ready), Qwen3 4B on the NPU 91% (fails chained lookups: invents the user id), Qwen3.6 35B-A3B 87% on the first suite version (before the JSON/no-tools fix; to rerun).
 
 First measurements (Framework 13, performance profile, AC, standard preset):

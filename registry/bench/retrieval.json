@@ -1,5 +1,5 @@
 {
-  "about": "contio retrieval set (spec §8.2): each query has exactly one relevant document, phrased with little word overlap so lexical matching isn't enough. Written for contio.",
+  "about": "contio retrieval set (spec §8.2): 24 queries, each with exactly one relevant document among 48; half the documents are same-topic distractors, and queries share few words with their answer. Written for contio.",
   "documents": {
     "d01": "Sourdough relies on a culture of wild yeast and lactic acid bacteria that ferments the flour, which gives the bread its tangy flavour and open crumb.",
     "d02": "A heat pump moves warmth from the outside air or ground into a building using a refrigerant cycle, so it delivers more heat energy than the electricity it consumes.",
@@ -24,32 +24,128 @@
     "d21": "A suspension bridge hangs its deck from vertical cables attached to main cables that run over tall towers and are anchored at both ends.",
     "d22": "Sleep cycles alternate between non-REM and REM stages roughly every 90 minutes, with most vivid dreaming occurring during REM sleep.",
     "d23": "Git stores a project's history as a chain of snapshots called commits, and branches are lightweight pointers to particular commits.",
-    "d24": "Coral reefs bleach when warmer water makes corals expel the symbiotic algae that supply them with food and colour."
+    "d24": "Coral reefs bleach when warmer water makes corals expel the symbiotic algae that supply them with food and colour.",
+    "d25": "Commercial baker's yeast is a single strain of Saccharomyces cerevisiae that makes dough rise quickly and gives bread a mild, neutral flavour.",
+    "d26": "An air conditioner cools a room by evaporating refrigerant in an indoor coil and dumping the absorbed heat outside through a condenser.",
+    "d27": "The Treaty of Versailles in 1919 ended the First World War and imposed reparations and territorial losses on Germany.",
+    "d28": "Cellular respiration in mitochondria breaks glucose down with oxygen to release energy, producing carbon dioxide and water.",
+    "d29": "Garbage-collected languages like Java free unused memory automatically at runtime, so programmers rarely release objects by hand.",
+    "d30": "Endurance athletes often suffer muscle cramps late in a race, commonly linked to fatigue and loss of salts through sweat.",
+    "d31": "Volcanoes erupt when molten rock rises through cracks in the crust and gas pressure forces it to the surface.",
+    "d32": "Simple interest is calculated only on the original principal, so the amount earned each year stays the same.",
+    "d33": "Light from distant galaxies is shifted toward red wavelengths because the universe is expanding and the galaxies are moving away.",
+    "d34": "Antibiotics kill or stop bacteria but have no effect on viruses such as those that cause colds and flu.",
+    "d35": "A stalemate in chess occurs when the player to move has no legal move and is not in check, and the game ends in a draw.",
+    "d36": "Solid-state batteries replace the liquid electrolyte with a solid material, promising higher energy density and lower fire risk.",
+    "d37": "The traditional Japanese diet, rich in rice, fish, soy and vegetables, is often cited when explaining the country's long life expectancy.",
+    "d38": "DHCP servers automatically hand out IP addresses to devices when they join a local network.",
+    "d39": "Cubist artists like Picasso broke objects into geometric shapes and showed several viewpoints at once.",
+    "d40": "Neutron stars are the collapsed cores of massive stars that were not heavy enough to become black holes.",
+    "d41": "Mulching covers the soil surface with straw or wood chips to keep moisture in and suppress weeds.",
+    "d42": "The Dead Sea Scrolls are ancient Jewish manuscripts discovered in caves near Qumran in the 1940s.",
+    "d43": "Deflation is a sustained fall in prices, which can lead consumers to delay purchases and slow the economy.",
+    "d44": "Ants lay down pheromone trails so that other workers from the colony can follow the path to a food source.",
+    "d45": "A cantilever bridge is built from beams that project out from piers and are supported only at one end.",
+    "d46": "Insomnia is persistent difficulty falling or staying asleep, often linked to stress, caffeine or irregular schedules.",
+    "d47": "Subversion keeps a project's history on a central server as numbered revisions that developers check out.",
+    "d48": "Ocean acidification happens as seawater absorbs carbon dioxide, making it harder for shellfish to build their shells."
   },
   "queries": [
-    { "q": "Why does naturally leavened bread taste sour?", "doc": "d01" },
-    { "q": "How can a heating system output more warmth than the power it draws?", "doc": "d02" },
-    { "q": "Which 17th-century peace settlement founded the idea of national sovereignty?", "doc": "d03" },
-    { "q": "How do leaves make sugar from sunlight?", "doc": "d04" },
-    { "q": "What stops two threads from mutating the same data in a compiled systems language?", "doc": "d05" },
-    { "q": "Why do long-distance athletes suddenly lose energy late in a race?", "doc": "d06" },
-    { "q": "What causes mountains to rise and the ground to shake?", "doc": "d07" },
-    { "q": "Why do investments snowball the longer you leave them?", "doc": "d08" },
-    { "q": "Why does a passing emergency vehicle change its tone?", "doc": "d09" },
-    { "q": "How does an injection prepare the body against future disease?", "doc": "d10" },
-    { "q": "What is the special move that swaps the monarch and a tower?", "doc": "d11" },
-    { "q": "How should I store my phone's power cell so it lasts longer?", "doc": "d12" },
-    { "q": "Which eating pattern from southern Europe is good for the heart?", "doc": "d13" },
-    { "q": "How does my browser find the server address for a website name?", "doc": "d14" },
-    { "q": "What art movement painted light in the open air with loose strokes?", "doc": "d15" },
-    { "q": "What happens when a giant sun dies and nothing can escape it?", "doc": "d16" },
-    { "q": "How do I turn food waste into fertile earth?", "doc": "d17" },
-    { "q": "Which artifact was the key to reading ancient Egyptian writing?", "doc": "d18" },
-    { "q": "Why does my money buy less each year, and what do central bankers do about it?", "doc": "d19" },
-    { "q": "How do honeybees tell each other where the nectar is?", "doc": "d20" },
-    { "q": "How is the roadway of a long span bridge held up by cables?", "doc": "d21" },
-    { "q": "When during the night do we have our strongest dreams?", "doc": "d22" },
-    { "q": "How does version control keep track of a codebase's past states?", "doc": "d23" },
-    { "q": "Why do reefs turn white in hot seas?", "doc": "d24" }
+    {
+      "q": "Why does naturally leavened bread taste sour?",
+      "doc": "d01"
+    },
+    {
+      "q": "How can a heating system output more warmth than the power it draws?",
+      "doc": "d02"
+    },
+    {
+      "q": "Which 17th-century peace settlement founded the idea of national sovereignty?",
+      "doc": "d03"
+    },
+    {
+      "q": "How do leaves make sugar from sunlight?",
+      "doc": "d04"
+    },
+    {
+      "q": "What stops two threads from mutating the same data in a compiled systems language?",
+      "doc": "d05"
+    },
+    {
+      "q": "Why do long-distance athletes suddenly lose energy late in a race?",
+      "doc": "d06"
+    },
+    {
+      "q": "What causes mountains to rise and the ground to shake?",
+      "doc": "d07"
+    },
+    {
+      "q": "Why do investments snowball the longer you leave them?",
+      "doc": "d08"
+    },
+    {
+      "q": "Why does a passing emergency vehicle change its tone?",
+      "doc": "d09"
+    },
+    {
+      "q": "How does an injection prepare the body against future disease?",
+      "doc": "d10"
+    },
+    {
+      "q": "What is the special move that swaps the monarch and a tower?",
+      "doc": "d11"
+    },
+    {
+      "q": "How should I store my phone's power cell so it lasts longer?",
+      "doc": "d12"
+    },
+    {
+      "q": "Which eating pattern from southern Europe is good for the heart?",
+      "doc": "d13"
+    },
+    {
+      "q": "How does my browser find the server address for a website name?",
+      "doc": "d14"
+    },
+    {
+      "q": "What art movement painted light in the open air with loose strokes?",
+      "doc": "d15"
+    },
+    {
+      "q": "What happens when a giant sun dies and nothing can escape it?",
+      "doc": "d16"
+    },
+    {
+      "q": "How do I turn food waste into fertile earth?",
+      "doc": "d17"
+    },
+    {
+      "q": "Which artifact was the key to reading ancient Egyptian writing?",
+      "doc": "d18"
+    },
+    {
+      "q": "Why does my money buy less each year, and what do central bankers do about it?",
+      "doc": "d19"
+    },
+    {
+      "q": "How do honeybees tell each other where the nectar is?",
+      "doc": "d20"
+    },
+    {
+      "q": "How is the roadway of a long span bridge held up by cables?",
+      "doc": "d21"
+    },
+    {
+      "q": "When during the night do we have our strongest dreams?",
+      "doc": "d22"
+    },
+    {
+      "q": "How does a distributed version control tool record snapshots of a project and its branches?",
+      "doc": "d23"
+    },
+    {
+      "q": "Why do reefs turn white in hot seas?",
+      "doc": "d24"
+    }
   ]
 }

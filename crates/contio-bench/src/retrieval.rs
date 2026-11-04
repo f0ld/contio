@@ -1,5 +1,5 @@
-//! Retrieval quality of embedding and reranker models (spec §8.2): rank 24
-//! documents for 24 paraphrased queries (`registry/bench/retrieval.json`),
+//! Retrieval quality of embedding and reranker models (spec §8.2): rank 48
+//! documents (half of them same-topic distractors) for 24 paraphrased queries (`registry/bench/retrieval.json`),
 //! report recall@1 and mean reciprocal rank.
 //!
 //! Texts are sent without model-specific prefixes (some embedding models
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn set_is_consistent() {
         let set: Set = serde_json::from_str(SET).unwrap();
-        assert_eq!(set.documents.len(), 24);
+        assert_eq!(set.documents.len(), 48, "24 answers + 24 same-topic distractors");
         assert_eq!(set.queries.len(), 24);
         let mut used: Vec<&String> = set.queries.iter().map(|q| &q.doc).collect();
         used.sort();
