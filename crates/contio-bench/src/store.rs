@@ -106,8 +106,59 @@ CREATE TABLE IF NOT EXISTS metrics (
     value  REAL NOT NULL,
     PRIMARY KEY (run_id, name)
 );
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS arena_votes (
+    id         INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    prompt     TEXT NOT NULL,
+    model_a    TEXT NOT NULL,
+    model_b    TEXT NOT NULL,
+    -- a, b, tie, both_bad
+    winner     TEXT NOT NULL
+);
+PRAGMA user_version = 2;
 ";
+
+/// One blind side-by-side comparison.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Vote {
+    #[serde(default)]
+    pub id: i64,
+    #[serde(default)]
+    pub created_at: i64,
+    pub prompt: String,
+    pub model_a: String,
+    pub model_b: String,
+    pub winner: Winner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Winner {
+    A,
+    B,
+    Tie,
+    BothBad,
+}
+
+impl Winner {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::A => "a",
+            Self::B => "b",
+            Self::Tie => "tie",
+            Self::BothBad => "both_bad",
+        }
+    }
+
+    fn parse(s: &str) -> Self {
+        match s {
+            "a" => Self::A,
+            "b" => Self::B,
+            "both_bad" => Self::BothBad,
+            _ => Self::Tie,
+        }
+    }
+}
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -226,6 +277,37 @@ impl Store {
             }
             None => Ok(None),
         }
+    }
+
+    pub fn add_vote(&self, v: &Vote) -> Result<i64> {
+        let c = self.conn();
+        c.execute(
+            "INSERT INTO arena_votes (created_at, prompt, model_a, model_b, winner) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![now(), v.prompt, v.model_a, v.model_b, v.winner.as_str()],
+        )
+        .map_err(err)?;
+        Ok(c.last_insert_rowid())
+    }
+
+    /// Oldest first (Elo depends on order).
+    pub fn votes(&self) -> Result<Vec<Vote>> {
+        let c = self.conn();
+        let mut stmt = c
+            .prepare("SELECT id, created_at, prompt, model_a, model_b, winner FROM arena_votes ORDER BY id")
+            .map_err(err)?;
+        stmt.query_map([], |r| {
+            Ok(Vote {
+                id: r.get(0)?,
+                created_at: r.get(1)?,
+                prompt: r.get(2)?,
+                model_a: r.get(3)?,
+                model_b: r.get(4)?,
+                winner: Winner::parse(&r.get::<_, String>(5)?),
+            })
+        })
+        .map_err(err)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(err)
     }
 
     pub fn delete(&self, id: i64) -> Result<bool> {

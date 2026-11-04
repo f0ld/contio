@@ -163,7 +163,11 @@
 </script>
 
 <section class="card form">
-  <h2>Run a benchmark</h2>
+  <div class="head">
+    <h2>Run a benchmark</h2>
+    <span class="spacer"></span>
+    <a href="/arena">Arena: compare two models blind →</a>
+  </div>
   <div class="row">
     <span class="label">Models</span>
     {#each models as m (m.id)}

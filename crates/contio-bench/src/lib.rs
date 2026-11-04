@@ -5,6 +5,7 @@
 //! The daemon owns model lifecycle (load timing, memory baselines, unloading
 //! other models) and runs these as background jobs.
 
+pub mod arena;
 pub mod custom;
 pub mod monitor;
 pub mod perf;

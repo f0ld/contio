@@ -332,6 +332,18 @@ export interface BenchRun {
   job_id: number | null;
 }
 
+// Mirrors crates/contio-bench/src/arena.rs and store::Vote.
+export interface ArenaRating {
+  model: string;
+  elo: number;
+  games: number;
+  wins: number;
+  losses: number;
+  ties: number;
+}
+
+export type ArenaWinner = "a" | "b" | "tie" | "both_bad";
+
 export interface BenchRequest {
   models: string[];
   preset: BenchPreset;

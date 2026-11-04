@@ -508,6 +508,30 @@ fn to_csv(runs: &[Run]) -> String {
     out
 }
 
+// --- arena --------------------------------------------------------------------
+
+/// Ratings and the latest votes.
+pub async fn arena(State(state): State<AppState>) -> Response {
+    match state.bench.votes() {
+        Ok(votes) => {
+            let ratings = contio_bench::arena::ratings(&votes);
+            let recent: Vec<_> = votes.iter().rev().take(50).collect();
+            Json(json!({ "ratings": ratings, "votes": votes.len(), "recent": recent })).into_response()
+        }
+        Err(e) => internal(&e),
+    }
+}
+
+pub async fn vote(State(state): State<AppState>, Json(v): Json<contio_bench::store::Vote>) -> Response {
+    if v.model_a == v.model_b {
+        return bad_request("the two models must differ");
+    }
+    match state.bench.add_vote(&v) {
+        Ok(id) => Json(json!({ "id": id })).into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
 fn internal(msg: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": msg, "type": "internal_error"}}))).into_response()
 }

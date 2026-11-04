@@ -390,7 +390,8 @@ contio serve                            # run daemon in foreground
 - [x] Speech suite: word error rate on 20 short LibriSpeech test-clean utterances (CC BY 4.0, 2.1 MB, compiled in) plus real-time factor; also runs FLM's NPU Whisper through its alias.
 - [x] "Thinking off" variant (`thinking: false` → `chat_template_kwargs.enable_thinking = false`) for tool-calling and quality suites; recorded with the run.
 - [x] Custom prompt sets as TOML (not YAML: the same format as `config.toml`; `docs/bench-set.example.toml`): per item `contains`, `not_contains`, `regex`, `json_schema` (sent as `response_format` and validated), `max_tokens`; optional system prompt. `contio bench run <model> --set file.toml`.
-- [ ] Arena with Elo; LLM-as-judge
+- [x] Arena (GUI `/arena`): the same prompt to two random models from a chosen pool, answers streamed side by side, names revealed after the vote (A / B / tie / both bad); Elo (K = 32, start 1000) recomputed from all stored votes; `/api/arena`, `/api/arena/votes`.
+- [ ] LLM-as-judge
 - [ ] Quant-ladder and device-comparison views
 
 Findings so far:

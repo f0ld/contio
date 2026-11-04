@@ -121,6 +121,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bench/runs", get(bench_api::list))
         .route("/api/bench/runs/{id}", get(bench_api::get).delete(bench_api::delete))
         .route("/api/bench/export", get(bench_api::export))
+        .route("/api/arena", get(bench_api::arena))
+        .route("/api/arena/votes", post(bench_api::vote))
         .route("/api/aliases", get(aliases::list))
         .route("/api/aliases/{name}", put(aliases::put).delete(aliases::delete))
         .route("/api/catalog", get(catalog_api::overview))
