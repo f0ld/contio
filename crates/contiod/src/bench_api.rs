@@ -566,7 +566,10 @@ pub async fn judge(State(state): State<AppState>, Json(r): Json<JudgeRequest>) -
         let body = json!({
             "model": r.judge,
             "messages": [{ "role": "user", "content": judge_prompt(&r.prompt, first, second) }],
-            "max_tokens": 4096,
+            // a verdict, not an essay: small thinking models otherwise reason
+            // past any budget before writing the JSON
+            "max_tokens": 1024,
+            "chat_template_kwargs": { "enable_thinking": false },
             "response_format": { "type": "json_schema", "json_schema": { "name": "verdict", "schema": {
                 "type": "object",
                 "properties": { "winner": { "type": "string", "enum": ["A", "B", "tie"] }, "reason": { "type": "string" } },
@@ -581,6 +584,9 @@ pub async fn judge(State(state): State<AppState>, Json(r): Json<JudgeRequest>) -
             let v: Value = res.json().await.map_err(|e| e.to_string())?;
             if !status.is_success() {
                 return Err(format!("judge: HTTP {status}: {}", v["error"]["message"].as_str().unwrap_or_default()));
+            }
+            if v["choices"][0]["finish_reason"] == "length" {
+                return Err("the judge ran out of tokens before giving a verdict".to_owned());
             }
             let text = v["choices"][0]["message"]["content"].as_str().unwrap_or_default();
             let verdict: Value = serde_json::from_str(text.trim()).map_err(|e| format!("judge reply isn't JSON ({e})"))?;

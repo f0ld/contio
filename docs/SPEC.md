@@ -374,7 +374,7 @@ contio serve                            # run daemon in foreground
 - [x] Playground: streaming chat with reasoning, tool definitions and a tool-call inspector (send results back), image input, speed stats and the raw request; speech mode with file upload or microphone (recorded to 16 kHz WAV in the browser).
 - [x] Daemon stops its backends on SIGTERM/SIGHUP (was Ctrl-C only); per-backend pid files let the next start stop backends orphaned by a crash or `kill -9`.
 
-**M3: in progress** (branch `m3-bench`):
+**M3: done** (branch `m3-bench`):
 - [x] `contio-bench` performance harness through the daemon's own OpenAI endpoint (the path clients use): prefill and decode tok/s per prompt length (prompts calibrated to the model's tokenizer with two measurements, unique nonce per prompt against prompt caches, llama.cpp `timings` preferred over client timing), TTFT, N parallel requests; SoC power from the `PPT` sensor at 10 Hz → watts and J/token; idle power; load time; VRAM/system pool growth and backend RSS (mapped weights don't show as "used" on CPU); estimator prediction stored next to it.
 - [x] Presets quick (512 tokens, 1 run) / standard (512 + 4k, 3 runs, 4 parallel) / full (+16k, 5 runs). Run conditions recorded: power profile, AC/battery, backend + path, other loaded models.
 - [x] Runs as a background job (one at a time): unloads other idle models (optional), reloads the model for load time and memory, holds a lease so it isn't evicted.
@@ -391,7 +391,7 @@ contio serve                            # run daemon in foreground
 - [x] "Thinking off" variant (`thinking: false` → `chat_template_kwargs.enable_thinking = false`) for tool-calling and quality suites; recorded with the run.
 - [x] Custom prompt sets as TOML (not YAML: the same format as `config.toml`; `docs/bench-set.example.toml`): per item `contains`, `not_contains`, `regex`, `json_schema` (sent as `response_format` and validated), `max_tokens`; optional system prompt. `contio bench run <model> --set file.toml`.
 - [x] Arena (GUI `/arena`): the same prompt to two random models from a chosen pool, answers streamed side by side, names revealed after the vote (A / B / tie / both bad); Elo (K = 32, start 1000) recomputed from all stored votes; `/api/arena`, `/api/arena/votes`.
-- [x] LLM-as-judge in the arena: a third local model votes, asked twice with the answers swapped; only a consistent preference counts (else tie, against position bias). Judge votes are stored with the judge's name and rated separately from human votes.
+- [x] LLM-as-judge in the arena: a third local model votes, asked twice with the answers swapped; only a consistent preference counts (else tie, against position bias). Judge votes are stored with the judge's name and rated separately from human votes. The judge answers with thinking off and a 1024-token budget (a 4B thinking judge reasoned past 4096 tokens without a verdict); ~5 s per verdict.
 - [ ] Quant-ladder and device-comparison views
 
 Findings so far:
