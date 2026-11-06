@@ -1,10 +1,19 @@
 # Builds the AppImage for a pushed version tag (v1.2.3) and publishes it as a
-# GitHub release. Cut releases with scripts/release.sh.
+# GitHub release. Cut releases with scripts/release.sh. Can also be started by
+# hand for an existing tag: gh workflow run release.yml -f tag=v1.2.3
 name: release
 
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and publish, e.g. v0.3.0
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 permissions:
   contents: write
@@ -16,10 +25,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
 
       - name: Tag matches the version in the sources
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${TAG#v}"
           grep -q "^version = \"$v\"" Cargo.toml
           grep -q "\"version\": \"$v\"" apps/gui/src-tauri/tauri.conf.json
 
@@ -57,4 +68,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           appimage=$(ls target/release/bundle/appimage/*.AppImage)
-          gh release create "$GITHUB_REF_NAME" "$appimage" --title "contio $GITHUB_REF_NAME" --generate-notes
+          gh release create "$TAG" "$appimage" --title "contio $TAG" --generate-notes --verify-tag
