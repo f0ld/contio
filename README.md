@@ -20,8 +20,9 @@ The app starts the daemon if none is running and stops it when you close the win
 To keep the API up without the window and start it at login, turn on **Settings →
 Background service → Run in the background**: it installs `contiod` as a systemd user
 service (binaries in `~/.local/share/contio/bin`, refreshed when you start a newer
-AppImage). Start/Stop are there too, and in the header when the daemon is offline. Inference
-backends (llama.cpp, whisper.cpp, FastFlowLM) are set up from the app the first time
+AppImage). Start/Stop are there too, and in the header when the daemon is offline.
+
+Inference backends (llama.cpp, whisper.cpp, FastFlowLM) are set up from the app the first time
 a model needs them; NPU support needs the XRT runtime (`docs/spikes/m0-npu.md`).
 
 ## Build from source
