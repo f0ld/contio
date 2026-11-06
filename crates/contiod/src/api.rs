@@ -1,6 +1,7 @@
 //! HTTP surface of the daemon: management API (`/api/*`) and the
 //! OpenAI-compatible gateway (`/v1/*`, see `gateway.rs`).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, Path, State};
@@ -49,6 +50,8 @@ pub struct AppState {
     pub bench: contio_bench::store::Store,
     /// This daemon's own address, for benchmarks that go through the gateway.
     pub self_url: String,
+    /// Notified by `POST /api/shutdown` (the desktop app's Stop button).
+    pub shutdown: Arc<tokio::sync::Notify>,
 }
 
 /// Everything [`AppState::start`] needs besides the sampler interval.
@@ -99,8 +102,16 @@ impl AppState {
             registry,
             bench,
             self_url,
+            shutdown: Arc::default(),
         }
     }
+}
+
+/// `POST /api/shutdown`: stop the daemon like SIGTERM does (backends stopped in order).
+async fn shutdown(State(state): State<AppState>) -> Response {
+    tracing::info!("shutdown requested through the API");
+    state.shutdown.notify_one();
+    (StatusCode::ACCEPTED, Json(serde_json::json!({ "stopping": true }))).into_response()
 }
 
 pub fn router(state: AppState) -> Router {
@@ -111,6 +122,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/shutdown", post(shutdown))
         .route("/api/hw", get(hardware))
         .route("/api/events", get(events))
         .route("/api/models", get(model_statuses))

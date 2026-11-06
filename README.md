@@ -16,8 +16,11 @@ chmod +x contio_*_amd64.AppImage
 ./contio_*_amd64.AppImage cli ps      # the command-line client
 ```
 
-A daemon started by the app stops when the app closes. To keep the API up without
-the window, run `… daemon` instead (e.g. from a systemd user unit). Inference
+The app starts the daemon if none is running and stops it when you close the window.
+To keep the API up without the window and start it at login, turn on **Settings →
+Background service → Run in the background**: it installs `contiod` as a systemd user
+service (binaries in `~/.local/share/contio/bin`, refreshed when you start a newer
+AppImage). Start/Stop are there too, and in the header when the daemon is offline. Inference
 backends (llama.cpp, whisper.cpp, FastFlowLM) are set up from the app the first time
 a model needs them; NPU support needs the XRT runtime (`docs/spikes/m0-npu.md`).
 

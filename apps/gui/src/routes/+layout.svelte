@@ -5,6 +5,19 @@
   import { DAEMON_URL } from "$lib/daemon";
   import { jobs, startJobPolling } from "$lib/jobs.svelte";
   import { live, startLive } from "$lib/live.svelte";
+  import { daemonStart, isDesktop } from "$lib/desktop";
+
+  let starting = $state(false);
+  async function start() {
+    starting = true;
+    try {
+      await daemonStart();
+    } catch {
+      // details on the Settings page
+    } finally {
+      starting = false;
+    }
+  }
 
   let { children } = $props();
 
@@ -24,6 +37,7 @@
     { href: "/bench", label: "Benchmarks" },
     { href: "/jobs", label: "Jobs" },
     { href: "/backends", label: "Backends" },
+    { href: "/settings", label: "Settings" },
   ];
   const active = (href: string) =>
     href === "/" ? page.url.pathname === "/" : page.url.pathname.startsWith(href);
@@ -42,6 +56,9 @@
   <span class="conn {live.conn}" title={DAEMON_URL}>
     {live.conn === "open" ? "connected" : live.conn === "connecting" ? "connecting…" : "daemon offline"}
   </span>
+  {#if live.conn === "closed" && isDesktop()}
+    <button class="small" disabled={starting} onclick={start}>{starting ? "Starting…" : "Start"}</button>
+  {/if}
 </header>
 
 <main>

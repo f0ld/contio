@@ -135,11 +135,15 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("listening on http://{listen} (OpenAI API at http://{listen}/v1)");
 
     let jobs = state.installer.jobs.clone();
+    let requested = state.shutdown.clone();
     let stop = Arc::new(tokio::sync::Notify::new());
     let stopped = stop.clone();
     let serve = axum::serve(listener, api::router(state)).with_graceful_shutdown(async move { stopped.notified().await });
     let signal = async {
-        shutdown_signal().await;
+        tokio::select! {
+            () = shutdown_signal() => {}
+            () = requested.notified() => {}
+        }
         // benchmarks keep requests open against our own endpoint; downloads
         // and builds are left to resume on the next start
         for j in jobs.list() {
