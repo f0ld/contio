@@ -1,0 +1,60 @@
+# Builds the AppImage for a pushed version tag (v1.2.3) and publishes it as a
+# GitHub release. Cut releases with scripts/release.sh.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    # the oldest supported Ubuntu: an AppImage runs on distros with the same
+    # or a newer glibc, so it is built on an old one
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the version in the sources
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$v\"" Cargo.toml
+          grep -q "\"version\": \"$v\"" apps/gui/src-tauri/tauri.conf.json
+
+      - name: System packages (Tauri on Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev patchelf file
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/gui/package-lock.json
+
+      - name: Daemon and CLI (bundled next to the GUI)
+        run: |
+          cargo build --release --locked -p contiod -p contio-cli
+          mkdir -p apps/gui/src-tauri/binaries
+          for b in contiod contio; do
+            cp "target/release/$b" "apps/gui/src-tauri/binaries/$b-x86_64-unknown-linux-gnu"
+          done
+
+      - name: AppImage
+        working-directory: apps/gui
+        run: |
+          npm ci
+          npx tauri build --bundles appimage \
+            --config '{"bundle":{"externalBin":["binaries/contiod","binaries/contio"]}}'
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          appimage=$(ls target/release/bundle/appimage/*.AppImage)
+          gh release create "$GITHUB_REF_NAME" "$appimage" --title "contio $GITHUB_REF_NAME" --generate-notes

@@ -221,3 +221,6 @@ __marimo__/
 
 # contio: SvelteKit keeps app code in src/lib (the Python `lib/` rule above would hide it)
 !apps/gui/src/lib/
+
+# release builds: sidecar binaries copied in by the release workflow
+apps/gui/src-tauri/binaries/
