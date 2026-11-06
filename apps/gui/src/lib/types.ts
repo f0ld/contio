@@ -86,6 +86,8 @@ export type ModelStatus = {
   context: number | null;
   /** Installed through contio (removable); false for config.toml models. */
   managed: boolean;
+  /** A config.toml model with launch settings changed in contio. */
+  overridden: boolean;
   origin: ModelOrigin | null;
   source: ModelSource;
   pool: MemoryPoolKind;

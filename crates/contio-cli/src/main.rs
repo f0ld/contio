@@ -107,6 +107,9 @@ enum Command {
         /// Unload after this many idle seconds (0 = daemon default).
         #[arg(long)]
         idle_ttl: Option<u64>,
+        /// config.toml models: drop the changes made here and use the file's settings.
+        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl"])]
+        reset: bool,
     },
     /// Load a model (and keep it loaded until idle/evicted).
     Load { model: String },
@@ -324,7 +327,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 eprintln!("removed its aliases: {}", aliases.join(", "));
             }
         }
-        Command::Set { model, context, pin, unpin, device, idle_ttl } => {
+        Command::Set { model, reset: true, .. } => {
+            client.delete(&format!("/api/models/{}/overrides", urlencode(&model))).await?;
+            eprintln!("{model} uses its config.toml settings again (restarts on next use if it was loaded)");
+        }
+        Command::Set { model, context, pin, unpin, device, idle_ttl, reset: false } => {
             let pinned = if pin { Some(true) } else if unpin { Some(false) } else { None };
             let body = json!({ "context": context, "pinned": pinned, "device": device, "idle_ttl_secs": idle_ttl });
             let body = Value::Object(body.as_object().cloned().unwrap_or_default().into_iter().filter(|(_, v)| !v.is_null()).collect());

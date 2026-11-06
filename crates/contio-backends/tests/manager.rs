@@ -225,9 +225,9 @@ async fn runtime_registration() {
     let st = m.statuses();
     assert!(!st[0].managed && st[1].managed);
 
-    // config models can't be changed through the API
+    // config models can be retuned through the API, not removed
     let cfg = m.profile("cfg").unwrap();
-    assert!(matches!(m.update_profile(cfg).await, Err(BackendError::NotManaged(_))));
+    m.update_profile(cfg).await.unwrap(); // launch settings of config models can change (saved as overrides)
     assert!(matches!(m.remove_profile("cfg").await, Err(BackendError::NotManaged(_))));
 
     // updating a running model restarts it with the new settings

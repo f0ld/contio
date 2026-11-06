@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
-    let config = Config::load(&args.config.unwrap_or_else(config::default_config_path))?;
+    let mut config = Config::load(&args.config.unwrap_or_else(config::default_config_path))?;
     let listen = args
         .listen
         .or(config.server.listen)
@@ -79,12 +79,14 @@ async fn main() -> anyhow::Result<()> {
     if !orphans.is_empty() {
         tracing::warn!(?orphans, "stopped backends a previous contiod left running");
     }
+    // saved overrides of config.toml models apply before the manager sees them
+    let mut registry = registry::Registry::new(&data_dir);
+    registry.apply_overrides(&mut config.models);
     let manager = build_manager(&config, &hw);
     if let Some(f) = &config.backends.flm {
         installer.set_flm(flm_config(f));
     }
     register_installed_backends(&config, &manager, &installer);
-    let registry = registry::Registry::new(&data_dir);
     registry.restore(&manager);
     tracing::info!(
         models = manager.profiles().len(),
