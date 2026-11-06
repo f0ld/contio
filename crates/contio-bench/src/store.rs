@@ -334,6 +334,32 @@ impl Store {
             .map_err(err)
     }
 
+    /// One row per (day, model) for days >= `since`, oldest first.
+    pub fn usage_by_day(&self, since: &str) -> Result<Vec<(String, UsageCounts)>> {
+        let c = self.conn();
+        let mut stmt = c
+            .prepare(
+                "SELECT day, model, requests, prompt_tokens, completion_tokens, audio_seconds
+                 FROM usage_daily WHERE day >= ?1 ORDER BY day, model",
+            )
+            .map_err(err)?;
+        stmt.query_map(params![since], |r| {
+            Ok((
+                r.get(0)?,
+                UsageCounts {
+                    model: r.get(1)?,
+                    requests: r.get::<_, i64>(2)? as u64,
+                    prompt_tokens: r.get::<_, i64>(3)? as u64,
+                    completion_tokens: r.get::<_, i64>(4)? as u64,
+                    audio_seconds: r.get(5)?,
+                },
+            ))
+        })
+        .map_err(err)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(err)
+    }
+
     /// Totals per model for days >= `since` (YYYY-MM-DD), or all days.
     pub fn usage_totals(&self, since: Option<&str>) -> Result<Vec<UsageCounts>> {
         let c = self.conn();
@@ -438,6 +464,9 @@ mod tests {
         store.add_usage("2026-11-06", &u("b", 3, 0)).unwrap();
         let all = store.usage_totals(None).unwrap();
         assert_eq!((all[0].requests, all[0].prompt_tokens, all[0].completion_tokens), (3, 31, 13));
+        let days = store.usage_by_day("2026-11-06").unwrap();
+        assert_eq!(days.len(), 2, "two models on the 6th");
+        assert_eq!((days[0].0.as_str(), days[0].1.prompt_tokens), ("2026-11-06", 21));
         let today = store.usage_totals(Some("2026-11-06")).unwrap();
         assert_eq!(today.iter().map(|x| (x.model.as_str(), x.requests)).collect::<Vec<_>>(), [("a", 2), ("b", 1)]);
     }

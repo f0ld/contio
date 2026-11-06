@@ -9,9 +9,11 @@ import type {
   BenchRequest,
   BenchRun,
   CatalogOverview,
+  DailyUsage,
   HardwareInfo,
   InstallMethod,
   InstallModelRequest,
+  LiveUsage,
   Job,
   Metrics,
   ModelDetail,
@@ -194,3 +196,7 @@ export function compactNumber(n: number): string {
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
+
+export const fetchLiveUsage = () => request<LiveUsage>("/api/usage/live");
+
+export const fetchDailyUsage = (days: number) => request<DailyUsage>(`/api/usage/daily?days=${days}`);

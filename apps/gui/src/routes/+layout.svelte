@@ -35,6 +35,7 @@
     { href: "/playground", label: "Playground" },
     { href: "/catalog", label: "Catalog" },
     { href: "/bench", label: "Benchmarks" },
+    { href: "/stats", label: "Statistics" },
     { href: "/jobs", label: "Jobs" },
     { href: "/backends", label: "Backends" },
     { href: "/settings", label: "Settings" },

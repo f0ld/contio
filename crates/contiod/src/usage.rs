@@ -25,11 +25,24 @@ use crate::api::AppState;
 /// How much of a JSON body's end is kept to find `usage` (it comes last).
 const TAIL: usize = 64 * 1024;
 
+/// How far back the live view reaches.
+pub const LIVE_SECONDS: u64 = 300;
+
+/// One second of traffic for one model.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Tick {
+    pub generated: u64,
+    pub prompt: u64,
+    pub requests: u64,
+}
+
 #[derive(Clone)]
 pub struct UsageTracker {
     /// Unix seconds.
     pub started_at: u64,
     session: Arc<Mutex<BTreeMap<String, UsageCounts>>>,
+    /// Unix second → model → traffic, the last `LIVE_SECONDS`.
+    live: Arc<Mutex<BTreeMap<u64, BTreeMap<String, Tick>>>>,
     store: Store,
     /// Seconds east of UTC, for day boundaries in local time.
     utc_offset: i64,
@@ -40,6 +53,7 @@ impl UsageTracker {
         Self {
             started_at: unix_now(),
             session: Default::default(),
+            live: Default::default(),
             store,
             utc_offset: local_utc_offset(),
         }
@@ -63,6 +77,25 @@ impl UsageTracker {
             }
             Err(_) => write(),
         }
+    }
+
+    /// Add to the live view (generated tokens as they stream, the rest at the end).
+    pub fn live_add(&self, model: &str, tick: Tick) {
+        let now = unix_now();
+        let mut live = self.live.lock().expect("usage lock poisoned");
+        let t = live.entry(now).or_default().entry(model.to_owned()).or_default();
+        t.generated += tick.generated;
+        t.prompt += tick.prompt;
+        t.requests += tick.requests;
+        let oldest = now.saturating_sub(LIVE_SECONDS);
+        while live.first_key_value().is_some_and(|(k, _)| *k < oldest) {
+            live.pop_first();
+        }
+    }
+
+    /// The last `LIVE_SECONDS` seconds, oldest first, per model.
+    pub fn live(&self) -> (u64, BTreeMap<u64, BTreeMap<String, Tick>>) {
+        (unix_now(), self.live.lock().expect("usage lock poisoned").clone())
     }
 
     pub fn session(&self) -> Vec<UsageCounts> {
@@ -143,6 +176,92 @@ pub async fn report(State(state): State<AppState>, Query(q): Query<UsageQuery>) 
     .into_response()
 }
 
+/// `GET /api/usage/live`: throughput of the last `LIVE_SECONDS`, per second
+/// (all models) and per model, plus requests in flight.
+pub async fn live(State(state): State<AppState>) -> Response {
+    let (now, window) = state.usage.live();
+    let first = now.saturating_sub(LIVE_SECONDS - 1);
+    let series: Vec<Value> = (first..=now)
+        .map(|t| {
+            let sum = window.get(&t).map(|m| m.values().fold(Tick::default(), |a, x| Tick {
+                generated: a.generated + x.generated,
+                prompt: a.prompt + x.prompt,
+                requests: a.requests + x.requests,
+            }));
+            let s = sum.unwrap_or_default();
+            json!({ "t": t, "generated": s.generated, "prompt": s.prompt, "requests": s.requests })
+        })
+        .collect();
+    // rates over completed seconds only (the current one is still filling)
+    let rate = |model: &str, secs: u64, f: fn(&Tick) -> u64| -> f64 {
+        let from = now.saturating_sub(secs);
+        let total: u64 = window.range(from..now).filter_map(|(_, m)| m.get(model)).map(f).sum();
+        total as f64 / secs as f64
+    };
+    let statuses = state.manager.statuses();
+    let mut names: Vec<String> = window.values().flat_map(|m| m.keys().cloned()).collect();
+    names.extend(statuses.iter().filter(|s| s.in_flight > 0).map(|s| s.id.clone()));
+    names.sort();
+    names.dedup();
+    let models: Vec<Value> = names
+        .iter()
+        .map(|m| {
+            json!({
+                "model": m,
+                "generated_tps_10s": rate(m, 10, |t| t.generated),
+                "generated_tps_60s": rate(m, 60, |t| t.generated),
+                "prompt_tps_60s": rate(m, 60, |t| t.prompt),
+                "requests_60s": window.range(now.saturating_sub(60)..now).filter_map(|(_, x)| x.get(m)).map(|t| t.requests).sum::<u64>(),
+                "in_flight": statuses.iter().find(|s| &s.id == m).map_or(0, |s| s.in_flight),
+            })
+        })
+        .collect();
+    Json(json!({
+        "now": now,
+        "window_seconds": LIVE_SECONDS,
+        "in_flight": statuses.iter().map(|s| s.in_flight).sum::<u32>(),
+        "series": series,
+        "models": models,
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DailyQuery {
+    /// Days back, today included (default 30, at most 366).
+    pub days: Option<u32>,
+}
+
+/// `GET /api/usage/daily?days=N`: per day and model.
+pub async fn daily(State(state): State<AppState>, Query(q): Query<DailyQuery>) -> Response {
+    let t = state.usage.clone();
+    let n = q.days.unwrap_or(30).clamp(1, 366);
+    let now = unix_now();
+    let days: Vec<String> = (0..n).rev().map(|i| t.day(now.saturating_sub(u64::from(i) * 86_400))).collect();
+    let since = days[0].clone();
+    let store = t.store().clone();
+    let rows = match tokio::task::spawn_blocking(move || store.usage_by_day(&since)).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": e}}))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": e.to_string()}}))).into_response(),
+    };
+    // models by total tokens in the range, biggest first
+    let mut totals: BTreeMap<String, u64> = BTreeMap::new();
+    for (_, u) in &rows {
+        *totals.entry(u.model.clone()).or_default() += u.prompt_tokens + u.completion_tokens;
+    }
+    let mut models: Vec<(String, u64)> = totals.into_iter().collect();
+    models.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let rows: Vec<Value> = rows
+        .into_iter()
+        .map(|(day, u)| {
+            json!({ "day": day, "model": u.model, "requests": u.requests, "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens, "audio_seconds": u.audio_seconds })
+        })
+        .collect();
+    Json(json!({ "days": days, "models": models.into_iter().map(|m| m.0).collect::<Vec<_>>(), "rows": rows })).into_response()
+}
+
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
 }
@@ -216,12 +335,31 @@ struct Meter {
     model: String,
     usage: Option<(u64, u64)>,
     audio_seconds: f64,
+    /// Generated tokens already shown live (stream deltas).
+    streamed: u64,
+}
+
+impl Meter {
+    fn new(tracker: Option<UsageTracker>, model: &str) -> Self {
+        Self { tracker, model: model.to_owned(), usage: None, audio_seconds: 0.0, streamed: 0 }
+    }
+
+    /// A streamed delta: about one token, shown live right away.
+    fn delta(&mut self) {
+        self.streamed += 1;
+        if let Some(t) = &self.tracker {
+            t.live_add(&self.model, Tick { generated: 1, ..Tick::default() });
+        }
+    }
 }
 
 impl Drop for Meter {
     fn drop(&mut self) {
         if let Some(t) = self.tracker.take() {
             let (p, c) = self.usage.unwrap_or_default();
+            // the rest of the generated tokens (all of them for non-streamed answers)
+            let rest = c.saturating_sub(self.streamed);
+            t.live_add(&self.model, Tick { generated: rest, prompt: p, requests: 1 });
             t.record(UsageCounts {
                 model: std::mem::take(&mut self.model),
                 requests: 1,
@@ -245,12 +383,11 @@ pub struct Tapped {
 impl Tapped {
     /// Not counted (tests, internal calls).
     pub fn untracked(inner: reqwest::Response) -> Self {
-        Self { inner, meter: Meter { tracker: None, model: String::new(), usage: None, audio_seconds: 0.0 }, strip_usage: false }
+        Self { inner, meter: Meter::new(None, ""), strip_usage: false }
     }
 
     pub fn new(inner: reqwest::Response, tracker: UsageTracker, model: &str) -> Self {
-        let meter = Meter { tracker: Some(tracker), model: model.to_owned(), usage: None, audio_seconds: 0.0 };
-        Self { inner, meter, strip_usage: false }
+        Self { inner, meter: Meter::new(Some(tracker), model), strip_usage: false }
     }
 
     pub fn with_audio_seconds(mut self, seconds: f64) -> Self {
@@ -374,6 +511,13 @@ impl StreamTap {
             .collect::<Vec<_>>()
             .join("\n");
         let Ok(v) = serde_json::from_str::<Value>(&data) else { return false };
+        let d = &v["choices"][0]["delta"];
+        let produced = ["content", "reasoning_content", "reasoning"].iter().any(|k| d[*k].as_str().is_some_and(|s| !s.is_empty()))
+            || d["tool_calls"].is_array()
+            || v["choices"][0]["text"].as_str().is_some_and(|s| !s.is_empty());
+        if produced {
+            self.meter.delta();
+        }
         let Some(u) = v.get("usage").filter(|u| u.is_object()).and_then(counts) else { return false };
         self.meter.usage = Some(u);
         self.strip && v["choices"].as_array().is_some_and(Vec::is_empty)
@@ -442,6 +586,22 @@ mod tests {
     }
 
     #[test]
+    fn live_window_adds_up_and_forgets() {
+        let t = UsageTracker::new(Store::in_memory().unwrap());
+        t.live_add("m", Tick { generated: 3, ..Tick::default() });
+        t.live_add("m", Tick { generated: 2, prompt: 10, requests: 1 });
+        t.live_add("n", Tick { generated: 1, ..Tick::default() });
+        let (now, w) = t.live();
+        let sec = &w[&now];
+        assert_eq!((sec["m"].generated, sec["m"].prompt, sec["m"].requests), (5, 10, 1));
+        assert_eq!(sec["n"].generated, 1);
+        // older than the window: dropped on the next add
+        t.live.lock().unwrap().insert(now - LIVE_SECONDS - 5, BTreeMap::from([("m".to_owned(), Tick::default())]));
+        t.live_add("m", Tick::default());
+        assert!(t.live().1.keys().all(|k| *k >= now - LIVE_SECONDS));
+    }
+
+    #[test]
     fn usage_from_json_ends() {
         let body = br#"{"choices":[{"message":{"content":"say \"usage\" {"}}],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}"#;
         assert_eq!(usage_in_json_tail(body), Some((12, 7)));
@@ -451,7 +611,7 @@ mod tests {
     }
 
     fn tap(strip: bool) -> StreamTap {
-        StreamTap { meter: Meter { tracker: None, model: "m".into(), usage: None, audio_seconds: 0.0 }, sse: true, strip, buf: vec![] }
+        StreamTap { meter: Meter::new(None, "m"), sse: true, strip, buf: vec![] }
     }
 
     const STREAM: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n\

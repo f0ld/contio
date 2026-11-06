@@ -424,3 +424,25 @@ export interface UsageReport {
   period_since: string | null;
   models: { model: string; session: UsageCounts; today: UsageCounts; total: UsageCounts; period?: UsageCounts }[];
 }
+
+export interface LiveUsage {
+  now: number;
+  window_seconds: number;
+  in_flight: number;
+  series: { t: number; generated: number; prompt: number; requests: number }[];
+  models: {
+    model: string;
+    generated_tps_10s: number;
+    generated_tps_60s: number;
+    prompt_tps_60s: number;
+    requests_60s: number;
+    in_flight: number;
+  }[];
+}
+
+export interface DailyUsage {
+  days: string[];
+  /** biggest first */
+  models: string[];
+  rows: { day: string; model: string; requests: number; prompt_tokens: number; completion_tokens: number; audio_seconds: number }[];
+}

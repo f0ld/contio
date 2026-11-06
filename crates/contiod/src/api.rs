@@ -128,6 +128,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/shutdown", post(shutdown))
         .route("/api/usage", get(crate::usage::report))
+        .route("/api/usage/live", get(crate::usage::live))
+        .route("/api/usage/daily", get(crate::usage::daily))
         .route("/api/hw", get(hardware))
         .route("/api/events", get(events))
         .route("/api/models", get(model_statuses))

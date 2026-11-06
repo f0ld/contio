@@ -9,6 +9,15 @@
   --ok: #1f8a4c;
   --warn: #b7791f;
   --err: #c53030;
+  /* categorical series (dataviz reference palette, validated on these surfaces) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #8a8f9c; /* "other" */
   font-family: system-ui, sans-serif;
   font-size: 15px;
   color: var(--text);
@@ -22,6 +31,14 @@
     --muted: #9aa3b2;
     --border: #2e323b;
     --accent: #6ea0ff;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #6b7180;
   }
 }
 body {

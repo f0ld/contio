@@ -416,6 +416,7 @@ Finding: the CPU estimate is too low (llama.cpp's CPU RSS is 1.7× the estimate)
 - [x] Editable `config.toml` models: changes saved as overrides (`overrides.json`), reset per model.
 - [x] AppImage releases (GitHub Actions on `v*` tags; daemon + CLI bundled); daemon control and a systemd user service from the app.
 - [x] Token usage per model: every gateway response is metered as it passes (OpenAI `usage`, streams included; `include_usage` is requested and stripped again for clients that didn't ask). Session (since daemon start, memory) and per-day totals (`bench.db` `usage_daily`, local days). Audio requests count seconds (WAV/FLAC headers). `GET /api/usage[?days=N]`, `contio usage [--days N]`, dashboard column.
+- [x] Statistics tab: live generation throughput (streamed deltas counted as they pass, corrected by the final `usage`; 5-minute per-second window, `GET /api/usage/live`), requests in flight, per-model rates; daily usage as stacked columns per model over 7/30/90 days with totals per model and per day (`GET /api/usage/daily?days=N`). Series colours from the validated dataviz palette (light and dark).
 
 **Known gaps / M3 candidates**
 - whisper.cpp has no prebuilt Linux binaries upstream; Podman images exist but only tagged by commit (`main-vulkan-<sha>`), so only the source install is offered. large-v3-turbo doesn't translate (model limitation).
