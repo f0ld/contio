@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { deleteAlias, errorText, formatContext, setAlias, updateModel } from "$lib/daemon";
+  import { deleteAlias, errorText, formatContext, resetOverrides, setAlias, updateModel } from "$lib/daemon";
   import type { Alias, ModelPatch, ModelStatus } from "$lib/types";
 
-  /** Launch settings and aliases of one model; config.toml models are read-only except for new aliases. */
+  /** Launch settings and aliases of one model. Changes to config.toml models are saved as overrides. */
   let {
     model,
     aliases,
@@ -53,6 +53,20 @@
     }
   }
 
+  async function reset() {
+    saving = true;
+    error = null;
+    try {
+      await resetOverrides(model.id);
+      onchange();
+      onclose();
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      saving = false;
+    }
+  }
+
   async function aliasAction(f: () => Promise<unknown>) {
     error = null;
     try {
@@ -68,44 +82,43 @@
 <div class="editor">
   <div class="file sub" title={file}>{file}</div>
 
-  {#if model.managed}
-    <div class="grid">
-      {#if model.kind !== "transcription"}
-        <label>
-          Context
-          <input type="number" min="512" step="1024" bind:value={context} placeholder="backend default" />
-          <span class="sub">{formatContext(context)}</span>
-        </label>
-      {/if}
-      <label>
-        Device
-        {#if movable}
-          <select bind:value={device}>
-            <option value="gpu">GPU</option>
-            <option value="cpu">CPU</option>
-          </select>
-        {:else}
-          <span>{model.device.toUpperCase()}</span>
-        {/if}
-      </label>
-      <label title="Unload after this many idle minutes; empty or 0 = daemon default">
-        Idle unload
-        <input type="number" min="0" step="5" bind:value={ttlMinutes} placeholder="default" />
-        <span class="sub">min</span>
-      </label>
-      <label title="Never unloaded for being idle or evicted for other models">
-        <input type="checkbox" bind:checked={pinned} /> pinned
-      </label>
-      <label class="wide">
-        Extra backend arguments
-        <input class="mono" bind:value={extraArgs} placeholder="e.g. --temp 0.6 --top-k 20" />
-      </label>
-    </div>
-  {:else}
+  {#if !model.managed}
     <p class="sub">
-      Defined in <code>config.toml</code>: edit the file and restart contiod to change its settings. Aliases can be added here.
+      From <code>config.toml</code>. Changes here are saved as overrides on top of it; the file stays as it is.
     </p>
   {/if}
+  <div class="grid">
+    {#if model.kind !== "transcription"}
+      <label>
+        Context
+        <input type="number" min="512" step="1024" bind:value={context} placeholder="backend default" />
+        <span class="sub">{formatContext(context)}</span>
+      </label>
+    {/if}
+    <label>
+      Device
+      {#if movable}
+        <select bind:value={device}>
+          <option value="gpu">GPU</option>
+          <option value="cpu">CPU</option>
+        </select>
+      {:else}
+        <span>{model.device.toUpperCase()}</span>
+      {/if}
+    </label>
+    <label title="Unload after this many idle minutes; empty or 0 = daemon default">
+      Idle unload
+      <input type="number" min="0" step="5" bind:value={ttlMinutes} placeholder="default" />
+      <span class="sub">min</span>
+    </label>
+    <label title="Never unloaded for being idle or evicted for other models">
+      <input type="checkbox" bind:checked={pinned} /> pinned
+    </label>
+    <label class="wide">
+      Extra backend arguments
+      <input class="mono" bind:value={extraArgs} placeholder="e.g. --temp 0.6 --top-k 20" />
+    </label>
+  </div>
 
   <div class="row aliases">
     <span class="label">Aliases</span>
@@ -126,19 +139,19 @@
     <button class="small" disabled={!newAlias.trim()} onclick={() => aliasAction(() => setAlias(newAlias.trim(), model.id))}>
       Add
     </button>
-    {#if !model.managed}<span class="spacer"></span><button class="small" onclick={onclose}>Close</button>{/if}
   </div>
   {#if error}<p class="error-text">{error}</p>{/if}
-  {#if model.managed}
-    <div class="row">
-      <span class="sub">
-        {model.state === "ready" || model.state === "loading" ? "Saving restarts the model on its next request." : ""}
-      </span>
-      <span class="spacer"></span>
-      <button onclick={onclose}>Cancel</button>
-      <button class="primary" disabled={!dirty || saving} onclick={save}>{saving ? "Saving…" : "Save"}</button>
-    </div>
-  {/if}
+  <div class="row">
+    <span class="sub">
+      {model.state === "ready" || model.state === "loading" ? "Saving restarts the model on its next request." : ""}
+    </span>
+    <span class="spacer"></span>
+    {#if model.overridden}
+      <button disabled={saving} onclick={reset} title="Drop the overrides and use the settings from config.toml">Reset to config.toml</button>
+    {/if}
+    <button onclick={onclose}>Cancel</button>
+    <button class="primary" disabled={!dirty || saving} onclick={save}>{saving ? "Saving…" : "Save"}</button>
+  </div>
 </div>
 
 <style>

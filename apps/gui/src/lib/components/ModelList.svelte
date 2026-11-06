@@ -84,7 +84,7 @@
               {#if m.kind !== "chat"}<span class="tag">{m.kind}</span>{/if}
               {#each aliases.filter((a) => a.model === m.id) as a (a.name)}<span class="tag" title="alias">= {a.name}</span>{/each}
               <div class="sub">
-                {m.backend ?? "no backend"}{m.origin?.quant && m.origin.quant !== "none" ? ` · ${m.origin.quant}` : ""}{m.managed ? "" : " · config.toml"}
+                {m.backend ?? "no backend"}{m.origin?.quant && m.origin.quant !== "none" ? ` · ${m.origin.quant}` : ""}{m.managed ? "" : m.overridden ? " · config.toml (changed)" : " · config.toml"}
               </div>
             </td>
             <td class="upper">{m.device}</td>

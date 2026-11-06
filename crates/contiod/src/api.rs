@@ -7,7 +7,7 @@ use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use contio_backends::ModelManager;
 use contio_core::hw::{HardwareInfo, Metrics};
@@ -115,6 +115,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/events", get(events))
         .route("/api/models", get(model_statuses))
         .route("/api/models/{id}", patch(catalog_api::update_model).delete(catalog_api::remove_model))
+        .route("/api/models/{id}/overrides", delete(catalog_api::reset_overrides))
         .route("/api/models/{id}/load", post(load_model))
         .route("/api/models/{id}/unload", post(unload_model))
         .route("/api/bench", post(bench_api::start))
@@ -173,7 +174,16 @@ async fn hardware(State(state): State<AppState>) -> Response {
 }
 
 async fn model_statuses(State(state): State<AppState>) -> Response {
-    Json(state.manager.statuses()).into_response()
+    Json(statuses(&state)).into_response()
+}
+
+/// Model statuses with the daemon's own knowledge added (config overrides).
+pub fn statuses(state: &AppState) -> Vec<contio_core::model::ModelStatus> {
+    let mut all = state.manager.statuses();
+    for s in &mut all {
+        s.overridden = !s.managed && state.registry.has_override(&s.id);
+    }
+    all
 }
 
 /// Load (or keep) a model without sending a request; returns its status.
@@ -181,7 +191,7 @@ async fn load_model(State(state): State<AppState>, Path(id): Path<String>) -> Re
     match state.manager.acquire(&id).await {
         Ok(lease) => {
             drop(lease);
-            let status = state.manager.statuses().into_iter().find(|s| s.id == id);
+            let status = statuses(&state).into_iter().find(|s| s.id == id);
             Json(status).into_response()
         }
         Err(e) => gateway::backend_error(&e),

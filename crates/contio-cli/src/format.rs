@@ -47,7 +47,7 @@ pub fn models(models: &[ModelStatus]) -> String {
                 notes.push("pinned");
             }
             if !m.managed {
-                notes.push("config");
+                notes.push(if m.overridden { "config, changed" } else { "config" });
             }
             [
                 m.id.clone(),
@@ -904,6 +904,7 @@ mod tests {
             kind: ModelKind::Chat,
             context: Some(32768),
             managed: id != "a",
+            overridden: false,
             origin: None,
             source: contio_core::model::ModelSource::Flm { tag: id.into() },
             pool: MemoryPoolKind::Gpu,

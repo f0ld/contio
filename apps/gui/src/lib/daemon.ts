@@ -58,6 +58,8 @@ export const removeModel = (id: string, deleteFiles: boolean) =>
 
 export const updateModel = (id: string, patch: ModelPatch) => send<ModelStatus>(`/api/models/${enc(id)}`, "PATCH", patch);
 
+export const resetOverrides = (id: string) => send<ModelStatus>(`/api/models/${enc(id)}/overrides`, "DELETE");
+
 export const fetchAliases = () => request<Alias[]>("/api/aliases");
 
 export const setAlias = (name: string, model: string) => send<Alias>(`/api/aliases/${enc(name)}`, "PUT", { model });

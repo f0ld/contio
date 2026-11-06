@@ -947,22 +947,61 @@ fn shard_paths(path: &Path) -> Vec<PathBuf> {
     }
 }
 
-/// Launch settings that can be changed on an installed model.
-#[derive(Debug, Deserialize)]
+/// Launch settings that can be changed on an installed model. Also the shape
+/// of a `config.toml` model's saved overrides (`overrides.json`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelPatch {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<bool>,
     /// Seconds; 0 = use the daemon default.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_ttl_secs: Option<u64>,
     /// gpu or cpu (GGUF models).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceKind>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<Vec<String>>,
+}
+
+impl ModelPatch {
+    /// Check the values against `p`, then apply them.
+    pub fn apply(&self, p: &mut ModelProfile) -> Result<(), String> {
+        if let Some(c) = self.context {
+            if !(512..=4 << 20).contains(&c) {
+                return Err("context must be between 512 and 4M tokens".into());
+            }
+            p.context = Some(c);
+        }
+        if let Some(pinned) = self.pinned {
+            p.pinned = pinned;
+        }
+        if let Some(t) = self.idle_ttl_secs {
+            p.idle_ttl_secs = (t > 0).then_some(t);
+        }
+        if let Some(d) = self.device {
+            let local = !matches!(p.source, ModelSource::Flm { .. });
+            if !local || !matches!(d, DeviceKind::Gpu | DeviceKind::Cpu) {
+                return Err("only GGUF and Whisper models can move, and only between gpu and cpu".into());
+            }
+            p.device = d;
+        }
+        if let Some(a) = &self.extra_args {
+            p.extra_args = a.clone();
+        }
+        Ok(())
+    }
+
+    /// Later changes win, field by field.
+    pub fn merge(&mut self, newer: &ModelPatch) {
+        self.context = newer.context.or(self.context);
+        self.pinned = newer.pinned.or(self.pinned);
+        self.idle_ttl_secs = newer.idle_ttl_secs.or(self.idle_ttl_secs);
+        self.device = newer.device.or(self.device);
+        self.extra_args = newer.extra_args.clone().or(self.extra_args.take());
+    }
 }
 
 pub async fn update_model(
@@ -974,33 +1013,33 @@ pub async fn update_model(
         Ok(p) => p,
         Err(e) => return crate::gateway::backend_error(&e),
     };
-    if let Some(c) = patch.context {
-        if !(512..=4 << 20).contains(&c) {
-            return bad_request("context must be between 512 and 4M tokens");
-        }
-        p.context = Some(c);
-    }
-    if let Some(pinned) = patch.pinned {
-        p.pinned = pinned;
-    }
-    if let Some(t) = patch.idle_ttl_secs {
-        p.idle_ttl_secs = (t > 0).then_some(t);
-    }
-    if let Some(d) = patch.device {
-        let local = !matches!(p.source, ModelSource::Flm { .. });
-        if !local || !matches!(d, DeviceKind::Gpu | DeviceKind::Cpu) {
-            return bad_request("only GGUF and Whisper models can move, and only between gpu and cpu");
-        }
-        p.device = d;
-    }
-    if let Some(a) = patch.extra_args {
-        p.extra_args = a;
+    if let Err(e) = patch.apply(&mut p) {
+        return bad_request(&e);
     }
     if let Err(e) = state.manager.update_profile(p).await {
         return crate::gateway::backend_error(&e);
     }
-    state.registry.save_models(&state.manager);
-    Json(state.manager.statuses().into_iter().find(|s| s.id == id)).into_response()
+    let managed = state.manager.managed_profiles().iter().any(|m| m.id == id);
+    if managed {
+        state.registry.save_models(&state.manager);
+    } else if let Err(e) = state.registry.add_override(&id, &patch) {
+        tracing::error!("saving overrides: {e}");
+    }
+    Json(crate::api::statuses(&state).into_iter().find(|s| s.id == id)).into_response()
+}
+
+/// `DELETE /api/models/{id}/overrides`: back to the `config.toml` settings.
+pub async fn reset_overrides(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Response {
+    let Some(original) = state.registry.config_profile(&id) else {
+        return bad_request(&format!("`{id}` isn't a config.toml model"));
+    };
+    if let Err(e) = state.manager.update_profile(original).await {
+        return crate::gateway::backend_error(&e);
+    }
+    if let Err(e) = state.registry.clear_override(&id) {
+        tracing::error!("saving overrides: {e}");
+    }
+    Json(crate::api::statuses(&state).into_iter().find(|s| s.id == id)).into_response()
 }
 
 #[cfg(test)]

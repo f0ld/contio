@@ -177,6 +177,9 @@ pub struct ModelStatus {
     pub context: Option<u32>,
     /// Registered through the API (removable), as opposed to `config.toml`.
     pub managed: bool,
+    /// A `config.toml` model whose launch settings were changed through the API.
+    #[serde(default)]
+    pub overridden: bool,
     pub origin: Option<ModelOrigin>,
     pub source: ModelSource,
     pub pool: MemoryPoolKind,
@@ -226,6 +229,7 @@ mod tests {
             kind: ModelKind::Chat,
             context: None,
             managed: false,
+            overridden: false,
             origin: None,
             source: ModelSource::Flm { tag: "t".into() },
             pool: MemoryPoolKind::Gpu,

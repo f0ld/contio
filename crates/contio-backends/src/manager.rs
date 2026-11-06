@@ -143,9 +143,7 @@ impl ModelManager {
                 .iter_mut()
                 .find(|r| r.profile.id == profile.id)
                 .ok_or_else(|| BackendError::UnknownModel(profile.id.clone()))?;
-            if !r.managed {
-                return Err(BackendError::NotManaged(profile.id));
-            }
+            // config.toml models too: the daemon saves their changes as overrides
             r.profile = profile.clone();
         }
         self.stop_slot(&profile.id).await;
@@ -348,6 +346,7 @@ impl ModelManager {
                     kind: p.kind,
                     context: p.context,
                     managed: r.managed,
+                    overridden: false,
                     origin: p.origin.clone(),
                     source: p.source.clone(),
                     pool: p.pool(),
