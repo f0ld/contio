@@ -1,6 +1,6 @@
 [package]
 name = "contio-gui"
-version = "0.3.1"
+version = "0.3.2"
 description = "contio desktop app (Tauri 2 + Svelte)"
 authors = ["f0ld"]
 edition = "2024"
