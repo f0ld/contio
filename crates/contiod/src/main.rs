@@ -10,6 +10,7 @@ mod config;
 mod gateway;
 mod install_api;
 mod registry;
+mod usage;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

@@ -23,11 +23,13 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{Value, json};
 
 use crate::api::AppState;
+use crate::usage::Tapped;
 
 /// An in-flight upstream response plus the lease that keeps its model loaded.
+/// The response counts its token usage (`usage.rs`).
 pub struct Upstream {
     pub lease: Lease,
-    pub response: reqwest::Response,
+    pub response: Tapped,
 }
 
 /// Resolve `request.model`, make sure the model runs, rewrite the model name for
@@ -39,9 +41,20 @@ pub async fn send(state: &AppState, mut request: Value, path: &str) -> Result<Up
     let (id, upstream_override) = resolve(state, name);
     let lease = state.manager.acquire(&id).await.map_err(|e| backend_error(&e))?;
     request["model"] = Value::String(upstream_override.unwrap_or_else(|| lease.upstream_model.clone()));
+    // streams carry usage only on request: ask for it, and keep the extra
+    // chunk from clients that didn't
+    let streaming = request["stream"] == true && (path.ends_with("/chat/completions") || path.ends_with("/completions"));
+    let inject = streaming && request["stream_options"]["include_usage"] != true;
+    if inject {
+        request["stream_options"]["include_usage"] = Value::Bool(true);
+    }
     let url = format!("{}{path}", lease.base_url);
     match state.http.post(&url).json(&request).send().await {
-        Ok(response) => Ok(Upstream { lease, response }),
+        Ok(response) => {
+            let mut response = Tapped::new(response, state.usage.clone(), &id);
+            response.strip_usage(inject);
+            Ok(Upstream { lease, response })
+        }
         Err(e) => Err(openai_error(
             StatusCode::BAD_GATEWAY,
             "upstream_error",
@@ -115,7 +128,8 @@ pub async fn passthrough(State(state): State<AppState>, OriginalUri(uri): Origin
 
 /// Stream an upstream response back unchanged. `guard` lives until the body
 /// is fully sent (or the client disconnects).
-pub fn relay<G: Send + 'static>(upstream: reqwest::Response, guard: G) -> Response {
+pub fn relay<G: Send + 'static>(upstream: impl Into<Tapped>, guard: G) -> Response {
+    let upstream: Tapped = upstream.into();
     let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE).cloned();
     let stream = upstream.bytes_stream().map(move |chunk| {

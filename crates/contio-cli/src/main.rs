@@ -157,6 +157,12 @@ enum Command {
         #[command(subcommand)]
         action: Option<BackendsAction>,
     },
+    /// Tokens per model: since the daemon started, today, all time.
+    Usage {
+        /// Also show the last N days.
+        #[arg(long)]
+        days: Option<u32>,
+    },
     /// Background jobs (downloads, installs).
     Jobs,
     /// Cancel a running job.
@@ -526,6 +532,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 }
             }
         },
+        Command::Usage { days } => {
+            let q = days.map(|d| format!("?days={d}")).unwrap_or_default();
+            let raw = client.get(&format!("/api/usage{q}")).await?;
+            if cli.json { println!("{raw}") } else { println!("{}", format::usage(&raw)) }
+        }
         Command::Jobs => {
             let raw = client.get("/api/jobs").await?;
             if cli.json { println!("{raw}") } else { println!("{}", format::jobs(&raw)) }

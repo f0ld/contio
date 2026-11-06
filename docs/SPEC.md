@@ -412,6 +412,11 @@ First measurements (Framework 13, performance profile, AC, standard preset):
 
 Finding: the CPU estimate is too low (llama.cpp's CPU RSS is 1.7× the estimate); GPU estimates are within 10–25% on the safe side.
 
+**After M3** (v0.3.x):
+- [x] Editable `config.toml` models: changes saved as overrides (`overrides.json`), reset per model.
+- [x] AppImage releases (GitHub Actions on `v*` tags; daemon + CLI bundled); daemon control and a systemd user service from the app.
+- [x] Token usage per model: every gateway response is metered as it passes (OpenAI `usage`, streams included; `include_usage` is requested and stripped again for clients that didn't ask). Session (since daemon start, memory) and per-day totals (`bench.db` `usage_daily`, local days). Audio requests count seconds (WAV/FLAC headers). `GET /api/usage[?days=N]`, `contio usage [--days N]`, dashboard column.
+
 **Known gaps / M3 candidates**
 - whisper.cpp has no prebuilt Linux binaries upstream; Podman images exist but only tagged by commit (`main-vulkan-<sha>`), so only the source install is offered. large-v3-turbo doesn't translate (model limitation).
 - NPU models have no memory estimate yet (FLM's `footprint` is shown in the catalog but not used for pool budgeting).

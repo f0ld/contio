@@ -20,6 +20,7 @@ import type {
   PreflightResult,
   RepoInfo,
   Settings,
+  UsageReport,
 } from "./types";
 
 export const DAEMON_URL: string = import.meta.env.VITE_CONTIOD_URL ?? "http://127.0.0.1:8080";
@@ -184,3 +185,12 @@ export const askJudge = (r: { prompt: string; model_a: string; model_b: string; 
 
 export const castVote = (vote: { prompt: string; model_a: string; model_b: string; winner: ArenaWinner }) =>
   send<{ id: number }>("/api/arena/votes", "POST", vote);
+
+export const fetchUsage = (days?: number) => request<UsageReport>(`/api/usage${days ? `?days=${days}` : ""}`);
+
+/** 950, 12.3k, 4.56M */
+export function compactNumber(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}

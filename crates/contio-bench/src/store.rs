@@ -115,8 +115,36 @@ CREATE TABLE IF NOT EXISTS arena_votes (
     -- a, b, tie, both_bad
     winner     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage_daily (
+    day               TEXT NOT NULL,   -- YYYY-MM-DD, local time
+    model             TEXT NOT NULL,
+    requests          INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    audio_seconds     REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, model)
+);
 PRAGMA user_version = 2;
 ";
+
+/// API traffic of one model (a day, a period, or since the daemon started).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsageCounts {
+    pub model: String,
+    pub requests: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub audio_seconds: f64,
+}
+
+impl UsageCounts {
+    pub fn add(&mut self, o: &UsageCounts) {
+        self.requests += o.requests;
+        self.prompt_tokens += o.prompt_tokens;
+        self.completion_tokens += o.completion_tokens;
+        self.audio_seconds += o.audio_seconds;
+    }
+}
 
 /// One blind side-by-side comparison.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -289,6 +317,46 @@ impl Store {
         }
     }
 
+    /// Add one request's traffic to `day` (YYYY-MM-DD).
+    pub fn add_usage(&self, day: &str, u: &UsageCounts) -> Result<()> {
+        self.conn()
+            .execute(
+                "INSERT INTO usage_daily (day, model, requests, prompt_tokens, completion_tokens, audio_seconds)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (day, model) DO UPDATE SET
+                    requests = requests + excluded.requests,
+                    prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+                    completion_tokens = completion_tokens + excluded.completion_tokens,
+                    audio_seconds = audio_seconds + excluded.audio_seconds",
+                params![day, u.model, u.requests as i64, u.prompt_tokens as i64, u.completion_tokens as i64, u.audio_seconds],
+            )
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    /// Totals per model for days >= `since` (YYYY-MM-DD), or all days.
+    pub fn usage_totals(&self, since: Option<&str>) -> Result<Vec<UsageCounts>> {
+        let c = self.conn();
+        let mut stmt = c
+            .prepare(
+                "SELECT model, SUM(requests), SUM(prompt_tokens), SUM(completion_tokens), SUM(audio_seconds)
+                 FROM usage_daily WHERE (?1 IS NULL OR day >= ?1) GROUP BY model ORDER BY model",
+            )
+            .map_err(err)?;
+        stmt.query_map(params![since], |r| {
+            Ok(UsageCounts {
+                model: r.get(0)?,
+                requests: r.get::<_, i64>(1)? as u64,
+                prompt_tokens: r.get::<_, i64>(2)? as u64,
+                completion_tokens: r.get::<_, i64>(3)? as u64,
+                audio_seconds: r.get(4)?,
+            })
+        })
+        .map_err(err)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(err)
+    }
+
     pub fn add_vote(&self, v: &Vote) -> Result<i64> {
         let c = self.conn();
         c.execute(
@@ -359,6 +427,20 @@ fn metrics_of(c: &Connection, id: i64) -> Result<BTreeMap<String, f64>> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn usage_accumulates_per_day_and_model() {
+        let store = Store::in_memory().unwrap();
+        let u = |m: &str, p, c| UsageCounts { model: m.into(), requests: 1, prompt_tokens: p, completion_tokens: c, audio_seconds: 0.0 };
+        store.add_usage("2026-11-05", &u("a", 10, 5)).unwrap();
+        store.add_usage("2026-11-06", &u("a", 20, 7)).unwrap();
+        store.add_usage("2026-11-06", &u("a", 1, 1)).unwrap();
+        store.add_usage("2026-11-06", &u("b", 3, 0)).unwrap();
+        let all = store.usage_totals(None).unwrap();
+        assert_eq!((all[0].requests, all[0].prompt_tokens, all[0].completion_tokens), (3, 31, 13));
+        let today = store.usage_totals(Some("2026-11-06")).unwrap();
+        assert_eq!(today.iter().map(|x| (x.model.as_str(), x.requests)).collect::<Vec<_>>(), [("a", 2), ("b", 1)]);
+    }
 
     #[test]
     fn run_lifecycle() {

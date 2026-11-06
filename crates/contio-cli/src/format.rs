@@ -538,6 +538,54 @@ fn tool_detail(mut s: String, rep: &Value) -> String {
     s.trim_end().to_owned()
 }
 
+/// 950, 12.3k, 4.56M
+pub fn compact(n: u64) -> String {
+    match n {
+        0..1_000 => n.to_string(),
+        1_000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
+        _ => format!("{:.2}M", n as f64 / 1e6),
+    }
+}
+
+pub fn usage(v: &Value) -> String {
+    let models = v["models"].as_array().cloned().unwrap_or_default();
+    if models.is_empty() {
+        return "no API traffic recorded yet".into();
+    }
+    let cell = |u: &Value| {
+        let req = u["requests"].as_u64().unwrap_or(0);
+        if req == 0 {
+            return "-".to_owned();
+        }
+        let audio = u["audio_seconds"].as_f64().unwrap_or(0.0);
+        if audio > 0.0 && u["prompt_tokens"].as_u64() == Some(0) {
+            return format!("{req} req · {:.0} s audio", audio);
+        }
+        format!(
+            "{req} req · {} in · {} out",
+            compact(u["prompt_tokens"].as_u64().unwrap_or(0)),
+            compact(u["completion_tokens"].as_u64().unwrap_or(0))
+        )
+    };
+    let name = |m: &Value| m["model"].as_str().unwrap_or_default().to_owned();
+    let mut out = match v["period_since"].as_str() {
+        Some(since) => {
+            let rows: Vec<[String; 5]> = models
+                .iter()
+                .map(|m| [name(m), cell(&m["session"]), cell(&m["today"]), cell(&m["period"]), cell(&m["total"])])
+                .collect();
+            table(&["MODEL", "THIS SESSION", "TODAY", &format!("SINCE {since}"), "ALL TIME"], &rows)
+        }
+        None => {
+            let rows: Vec<[String; 4]> =
+                models.iter().map(|m| [name(m), cell(&m["session"]), cell(&m["today"]), cell(&m["total"])]).collect();
+            table(&["MODEL", "THIS SESSION", "TODAY", "ALL TIME"], &rows)
+        }
+    };
+    out.push_str("\n\x1b[2min = prompt tokens, out = generated tokens; session = since the daemon started\x1b[0m");
+    out
+}
+
 pub fn aliases(v: &Value) -> String {
     let rows: Vec<[String; 3]> = v
         .as_array()

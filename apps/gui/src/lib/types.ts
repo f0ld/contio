@@ -408,3 +408,19 @@ export interface ToolsReportView {
   reps: number;
   cases: { id: string; category: string; runs: number; passed: number; failures: string[]; mean_s: number }[];
 }
+
+// Mirrors crates/contiod/src/usage.rs.
+export interface UsageCounts {
+  model: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  audio_seconds: number;
+}
+
+export interface UsageReport {
+  session_started_at: number;
+  today: string;
+  period_since: string | null;
+  models: { model: string; session: UsageCounts; today: UsageCounts; total: UsageCounts; period?: UsageCounts }[];
+}

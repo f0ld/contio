@@ -52,6 +52,8 @@ pub struct AppState {
     pub self_url: String,
     /// Notified by `POST /api/shutdown` (the desktop app's Stop button).
     pub shutdown: Arc<tokio::sync::Notify>,
+    /// Tokens per model, this session and per day.
+    pub usage: crate::usage::UsageTracker,
 }
 
 /// Everything [`AppState::start`] needs besides the sampler interval.
@@ -71,6 +73,7 @@ impl AppState {
     /// All WebSocket clients share this one sampler.
     pub fn start(services: Services, interval: Duration) -> Self {
         let Services { probe, manager, aliases, installer, catalog, registry, bench, self_url } = services;
+        let usage = crate::usage::UsageTracker::new(bench.clone());
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
         tokio::spawn(async move {
@@ -103,6 +106,7 @@ impl AppState {
             bench,
             self_url,
             shutdown: Arc::default(),
+            usage,
         }
     }
 }
@@ -123,6 +127,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/shutdown", post(shutdown))
+        .route("/api/usage", get(crate::usage::report))
         .route("/api/hw", get(hardware))
         .route("/api/events", get(events))
         .route("/api/models", get(model_statuses))

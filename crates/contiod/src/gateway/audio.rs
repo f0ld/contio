@@ -88,6 +88,7 @@ async fn handle(State(state): State<AppState>, mut form: Multipart, task: Task) 
         Err(e) => return backend_error(&e),
     };
     let upstream_model = upstream_override.unwrap_or_else(|| lease.upstream_model.clone());
+    let audio_s = fields.iter().find(|f| f.name == "file").map_or(0.0, |f| crate::usage::audio_seconds(&f.data));
     let mut out = Form::new();
     for f in fields {
         if f.name == "model" {
@@ -113,7 +114,7 @@ async fn handle(State(state): State<AppState>, mut form: Multipart, task: Task) 
     }
     let url = format!("{}{path}", lease.base_url);
     match state.http.post(&url).multipart(out).send().await {
-        Ok(r) => relay(r, lease),
+        Ok(r) => relay(crate::usage::Tapped::new(r, state.usage.clone(), &id).with_audio_seconds(audio_s), lease),
         Err(e) => openai_error(StatusCode::BAD_GATEWAY, "upstream_error", &format!("backend request failed: {e}"), None),
     }
 }
