@@ -1,6 +1,6 @@
 [package]
 name = "contio-gui"
-version = "0.3.6"
+version = "0.3.7"
 description = "contio desktop app (Tauri 2 + Svelte)"
 authors = ["f0ld"]
 license = "MIT OR Apache-2.0"
