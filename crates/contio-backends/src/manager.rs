@@ -51,10 +51,17 @@ struct Registered {
     managed: bool,
 }
 
+/// Estimated bytes per memory pool; empty if unknown.
+type Estimate = Vec<(MemoryPoolKind, u64)>;
+
+fn in_pool(e: &Estimate, pool: MemoryPoolKind) -> u64 {
+    e.iter().filter(|(p, _)| *p == pool).map(|(_, b)| b).sum()
+}
+
 struct Slot {
     state: SlotState,
     backend: &'static str,
-    estimate: Option<u64>,
+    estimate: Estimate,
     in_flight: Arc<AtomicU32>,
     /// Milliseconds since `Inner::epoch`.
     last_used: Arc<AtomicU64>,
@@ -247,18 +254,18 @@ impl ModelManager {
         }
 
         let backend = self.backend_for(&profile)?;
-        let estimate = backend.estimate_bytes(&profile);
-        for victim in self.make_room(&profile, estimate)? {
+        let estimate = backend.estimate_pools(&profile);
+        for victim in self.make_room(&profile, &estimate)? {
             tracing::info!(model = %victim.0, "evicting to make room for {id}");
             victim.1.stop().await;
         }
 
-        self.set_slot(id, SlotState::Loading, backend.name(), estimate);
+        self.set_slot(id, SlotState::Loading, backend.name(), estimate.clone());
         let port = free_port()?;
         let cmd = match backend.command(&profile, port) {
             Ok(cmd) => cmd,
             Err(e) => {
-                self.set_slot(id, SlotState::Failed(e.to_string()), backend.name(), estimate);
+                self.set_slot(id, SlotState::Failed(e.to_string()), backend.name(), estimate.clone());
                 return Err(e);
             }
         };
@@ -277,7 +284,7 @@ impl ModelManager {
         {
             Ok(instance) => {
                 tracing::info!(model = id, secs = started.elapsed().as_secs_f32(), "ready");
-                self.set_slot(id, SlotState::Ready(instance), backend.name(), estimate);
+                self.set_slot(id, SlotState::Ready(instance), backend.name(), estimate.clone());
                 Ok(self.try_lease(id).expect("just marked ready"))
             }
             Err(reason) => {
@@ -368,6 +375,11 @@ impl ModelManager {
                 let p = &r.profile;
                 let backend = self.backend_for(p).ok();
                 let slot = slots.get(&p.id);
+                let estimate = slot
+                    .map(|s| s.estimate.clone())
+                    .filter(|e| !e.is_empty())
+                    .or_else(|| backend.as_ref().map(|b| b.estimate_pools(p)))
+                    .unwrap_or_default();
                 ModelStatus {
                     id: p.id.clone(),
                     device: p.device,
@@ -384,11 +396,23 @@ impl ModelManager {
                     pinned: p.pinned,
                     idle_ttl_secs: p.idle_ttl_secs,
                     extra_args: p.extra_args.clone(),
-                    speculative: p.speculative,
+                    speculative: p.speculative.clone(),
+                    vocab_size: match &p.source {
+                        ModelSource::Gguf { path, .. } => crate::gguf::vocab_size(path),
+                        _ => None,
+                    },
+                    tuning: p.tuning,
                     has_mtp: matches!(&p.source, ModelSource::Gguf { path, .. } if crate::gguf::has_mtp(path)),
-                    estimated_bytes: slot
-                        .and_then(|s| s.estimate)
-                        .or_else(|| backend.and_then(|b| b.estimate_bytes(p))),
+                    moe_layers: match &p.source {
+                        ModelSource::Gguf { path, .. } => {
+                            crate::gguf::expert_bytes_per_layer(path).iter().filter(|&&b| b > 0).count() as u32
+                        }
+                        _ => 0,
+                    },
+                    estimated_bytes: (!estimate.is_empty()).then(|| estimate.iter().map(|(_, b)| b).sum()),
+                    offloaded_bytes: (p.pool() == MemoryPoolKind::Gpu)
+                        .then(|| in_pool(&estimate, MemoryPoolKind::System))
+                        .filter(|&b| b > 0),
                     state: match slot.map(|s| &s.state) {
                         None => ModelState::Stopped,
                         Some(SlotState::Loading) => ModelState::Loading,
@@ -456,13 +480,13 @@ impl ModelManager {
         })
     }
 
-    fn set_slot(&self, id: &str, state: SlotState, backend: &'static str, estimate: Option<u64>) {
+    fn set_slot(&self, id: &str, state: SlotState, backend: &'static str, estimate: Estimate) {
         let mut slots = self.lock_slots();
         let now = millis_since(self.inner.epoch);
         let slot = slots.entry(id.to_owned()).or_insert_with(|| Slot {
             state: SlotState::Loading,
             backend,
-            estimate,
+            estimate: estimate.clone(),
             in_flight: Arc::new(AtomicU32::new(0)),
             last_used: Arc::new(AtomicU64::new(now)),
         });
@@ -472,63 +496,60 @@ impl ModelManager {
         slot.last_used.store(now, Ordering::Relaxed);
     }
 
-    /// Pick LRU victims in `profile`'s pool so `estimate` fits, and remove them
-    /// from the slot table. Errors without touching anything if even evicting
-    /// every candidate would not be enough.
-    fn make_room(
-        &self,
-        profile: &ModelProfile,
-        estimate: Option<u64>,
-    ) -> Result<Vec<(String, Instance)>, BackendError> {
-        let pool = profile.pool();
-        let (Some(need), Some(&budget)) = (estimate, self.inner.config.pool_budgets.get(&pool)) else {
-            return Ok(Vec::new());
-        };
-        let (in_pool, pinned): (Vec<String>, Vec<String>) = {
-            let profiles = self.read_profiles();
-            let ids = |f: &dyn Fn(&ModelProfile) -> bool| {
-                profiles.iter().filter(|r| f(&r.profile)).map(|r| r.profile.id.clone()).collect()
-            };
-            (ids(&|p| p.pool() == pool), ids(&|p| p.pinned))
-        };
-        let in_pool = |id: &str| in_pool.iter().any(|p| p == id);
+    /// Pick LRU victims so `estimate` fits in every pool it needs (usually
+    /// one; MoE offload uses both), and remove them from the slot table.
+    /// Errors without touching anything if even evicting every candidate
+    /// would not be enough.
+    fn make_room(&self, profile: &ModelProfile, estimate: &Estimate) -> Result<Vec<(String, Instance)>, BackendError> {
+        let pinned: Vec<String> =
+            self.read_profiles().iter().filter(|r| r.profile.pinned).map(|r| r.profile.id.clone()).collect();
         let mut slots = self.lock_slots();
-        let mut used = 0u64;
-        let mut candidates: Vec<(u64, u64, String)> = Vec::new(); // (last_used, bytes, id)
-        for (id, slot) in slots.iter() {
-            if id == &profile.id || !in_pool(id) || matches!(slot.state, SlotState::Failed(_)) {
-                continue;
-            }
-            let bytes = slot.estimate.unwrap_or(0);
-            used += bytes;
-            let evictable = matches!(slot.state, SlotState::Ready(_))
-                && !pinned.contains(id)
-                && slot.in_flight.load(Ordering::Acquire) == 0;
-            if evictable {
-                candidates.push((slot.last_used.load(Ordering::Relaxed), bytes, id.clone()));
-            }
-        }
-        if used + need <= budget {
-            return Ok(Vec::new());
-        }
-        let reclaimable: u64 = candidates.iter().map(|c| c.1).sum();
-        if used - reclaimable + need > budget {
-            return Err(BackendError::InsufficientMemory {
-                model: profile.id.clone(),
-                pool: format!("{pool:?}").to_lowercase(),
-                needed_mib: need / MIB,
-                available_mib: budget.saturating_sub(used - reclaimable) / MIB,
-            });
-        }
-
+        // (last_used, id) of models that may go, oldest first
+        let mut candidates: Vec<(u64, String)> = slots
+            .iter()
+            .filter(|(id, slot)| {
+                *id != &profile.id
+                    && matches!(slot.state, SlotState::Ready(_))
+                    && !pinned.contains(id)
+                    && slot.in_flight.load(Ordering::Acquire) == 0
+            })
+            .map(|(id, slot)| (slot.last_used.load(Ordering::Relaxed), id.clone()))
+            .collect();
         candidates.sort_unstable();
-        let mut victims = Vec::new();
-        for (_, bytes, id) in candidates {
-            if used + need <= budget {
-                break;
+
+        let mut evict: Vec<String> = Vec::new();
+        for &(pool, need) in estimate {
+            let Some(&budget) = self.inner.config.pool_budgets.get(&pool) else { continue };
+            let usage = |slots: &HashMap<String, Slot>, skip: &[String]| -> u64 {
+                slots
+                    .iter()
+                    .filter(|(id, s)| *id != &profile.id && !skip.contains(id) && !matches!(s.state, SlotState::Failed(_)))
+                    .map(|(_, s)| in_pool(&s.estimate, pool))
+                    .sum()
+            };
+            let mut used = usage(&slots, &evict);
+            for (_, id) in &candidates {
+                if used + need <= budget {
+                    break;
+                }
+                let bytes = slots.get(id).map_or(0, |s| in_pool(&s.estimate, pool));
+                if bytes > 0 && !evict.contains(id) {
+                    evict.push(id.clone());
+                    used -= bytes;
+                }
             }
+            if used + need > budget {
+                return Err(BackendError::InsufficientMemory {
+                    model: profile.id.clone(),
+                    pool: format!("{pool:?}").to_lowercase(),
+                    needed_mib: need / MIB,
+                    available_mib: budget.saturating_sub(used) / MIB,
+                });
+            }
+        }
+        let mut victims = Vec::new();
+        for id in evict {
             if let Some(Slot { state: SlotState::Ready(i), .. }) = slots.remove(&id) {
-                used -= bytes;
                 victims.push((id, i));
             }
         }

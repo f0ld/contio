@@ -1,15 +1,27 @@
 <script lang="ts">
-  import { deleteAlias, errorText, fetchBackends, formatContext, resetOverrides, setAlias, updateModel } from "$lib/daemon";
+  import {
+    deleteAlias,
+    errorText,
+    fetchBackends,
+    formatBytes,
+    formatContext,
+    resetOverrides,
+    setAlias,
+    updateModel,
+  } from "$lib/daemon";
+  import PerfSetting from "$lib/components/PerfSetting.svelte";
   import { PERF_SETTINGS } from "$lib/performance";
   import type { Alias, BackendsInfo, GpuApi, ModelPatch, ModelStatus } from "$lib/types";
 
   /** Launch settings and aliases of one model. Changes to config.toml models are saved as overrides. */
   let {
     model,
+    models = [],
     aliases,
     onchange,
     onclose,
-  }: { model: ModelStatus; aliases: Alias[]; onchange: () => void; onclose: () => void } = $props();
+  }: { model: ModelStatus; models?: ModelStatus[]; aliases: Alias[]; onchange: () => void; onclose: () => void } =
+    $props();
 
   // the form starts from the model as it was when the editor opened
   // svelte-ignore state_referenced_locally
@@ -27,6 +39,21 @@
   const API_NAME = { vulkan: "Vulkan", rocm: "ROCm" } as const;
   let ngram = $state(initial.speculative?.ngram ?? false);
   let mtp = $state(initial.speculative?.mtp ?? false);
+  let draftId = $state<string>(initial.speculative?.draft?.id ?? "");
+  // same tokenizer, smaller, GGUF chat
+  const draftCandidates = $derived(
+    models.filter(
+      (m) =>
+        m.id !== initial.id &&
+        m.source.format === "gguf" &&
+        m.kind === "chat" &&
+        m.vocab_size !== null &&
+        m.vocab_size === initial.vocab_size &&
+        (m.estimated_bytes ?? Infinity) < (initial.estimated_bytes ?? 0) / 2,
+    ),
+  );
+  let kvCache = $state<string>(initial.tuning?.kv_cache ?? "f16");
+  let cpuMoe = $state<number>(initial.tuning?.cpu_moe_layers ?? 0);
   const speculative = isGguf && initial.kind === "chat";
   const hasExpert = isGguf;
   let saving = $state(false);
@@ -47,8 +74,17 @@
     const args = extraArgs.split(/\s+/).filter(Boolean);
     if (args.join(" ") !== initial.extra_args.join(" ")) p.extra_args = args;
     if (gpuApi !== (initial.gpu_api ?? "default")) p.gpu_api = gpuApi;
-    if (ngram !== (initial.speculative?.ngram ?? false) || mtp !== (initial.speculative?.mtp ?? false))
-      p.speculative = { ngram, mtp };
+    if (
+      ngram !== (initial.speculative?.ngram ?? false) ||
+      mtp !== (initial.speculative?.mtp ?? false) ||
+      draftId !== (initial.speculative?.draft?.id ?? "")
+    )
+      p.speculative = { ngram, mtp, draft: draftId ? { id: draftId } : null };
+    if (kvCache !== (initial.tuning?.kv_cache ?? "f16") || (cpuMoe || 0) !== (initial.tuning?.cpu_moe_layers ?? 0))
+      p.tuning = {
+        kv_cache: kvCache === "f16" ? null : (kvCache as "q8_0" | "q4_0"),
+        cpu_moe_layers: cpuMoe || null,
+      };
     return p;
   }
   let dirty = $derived(Object.keys(changes()).length > 0);
@@ -135,23 +171,58 @@
   </div>
 
   {#if hasExpert}
-    <details class="expert" open={initial.speculative?.ngram || initial.speculative?.mtp || initial.gpu_api !== null}>
+    <details
+      class="expert"
+      open={initial.speculative?.ngram || initial.speculative?.mtp || initial.gpu_api !== null || !!initial.tuning?.kv_cache || !!initial.tuning?.cpu_moe_layers}
+    >
       <summary><span class="badge">Expert</span> Performance</summary>
       <p class="sub">
         Each setting trades something for speed; measured on this laptop in <code>docs/PERFORMANCE.md</code>.
         Saving restarts the model.
       </p>
       {#if speculative}
-        {@render setting(PERF_SETTINGS.ngram, ngramControl)}
-        {@render setting(PERF_SETTINGS.mtp, mtpControl, model.has_mtp ? null : "This model file has no MTP layers.")}
+        <PerfSetting setting={PERF_SETTINGS.ngram}>{@render ngramControl()}</PerfSetting>
+        <PerfSetting setting={PERF_SETTINGS.mtp} note={model.has_mtp ? null : "This model file has no MTP layers."}>
+          {@render mtpControl()}
+        </PerfSetting>
+        <PerfSetting
+          setting={PERF_SETTINGS.draft}
+          note={draftCandidates.length
+            ? model.moe_layers > 0
+              ? "This is a MoE model: expect it to be slower."
+              : null
+            : "No installed model qualifies (same tokenizer, less than half the size), e.g. install Qwen3.5 0.8B for Qwen3.5/3.6."}
+        >
+          <select bind:value={draftId} disabled={(!draftCandidates.length && !draftId) || ngram}>
+            <option value="">Off</option>
+            {#each draftCandidates as c (c.id)}<option value={c.id}>{c.id}</option>{/each}
+            {#if draftId && !draftCandidates.some((c) => c.id === draftId)}<option value={draftId}>{draftId}</option>{/if}
+          </select>
+        </PerfSetting>
       {/if}
       {#if device === "gpu"}
-        {@render setting(PERF_SETTINGS.gpu_api, gpuControl)}
+        <PerfSetting setting={PERF_SETTINGS.gpu_api}>{@render gpuControl()}</PerfSetting>
       {/if}
+      {#if model.moe_layers > 0 && device === "gpu"}
+        <PerfSetting
+          setting={PERF_SETTINGS.cpu_moe}
+          note={model.offloaded_bytes ? `Now: ${formatBytes(model.offloaded_bytes)} in system memory.` : null}
+        >
+          <input type="number" min="0" max={model.moe_layers} bind:value={cpuMoe} style="width: 5rem" />
+          <span class="sub">of {model.moe_layers} layers</span>
+        </PerfSetting>
+      {/if}
+      <PerfSetting setting={PERF_SETTINGS.kv_cache}>
+        <select bind:value={kvCache}>
+          <option value="f16">Default (f16)</option>
+          <option value="q8_0">q8_0</option>
+          <option value="q4_0">q4_0</option>
+        </select>
+      </PerfSetting>
     </details>
   {/if}
 
-  {#snippet ngramControl()}<input type="checkbox" bind:checked={ngram} />{/snippet}
+  {#snippet ngramControl()}<input type="checkbox" bind:checked={ngram} disabled={!!draftId && !ngram} />{/snippet}
   {#snippet mtpControl()}<input type="checkbox" bind:checked={mtp} disabled={!model.has_mtp && !mtp} />{/snippet}
   {#snippet gpuControl()}
     <select bind:value={gpuApi}>
@@ -161,16 +232,6 @@
         ROCm{backends && !hasBuild("rocm") ? " (not installed)" : ""}
       </option>
     </select>
-  {/snippet}
-  {#snippet setting(s: (typeof PERF_SETTINGS)[keyof typeof PERF_SETTINGS], control: import("svelte").Snippet, blocked: string | null = null)}
-    <div class="perf">
-      <label class="perf-head">{@render control()} <b>{s.title}</b></label>
-      <p class="sub">{s.what}{blocked ? ` ${blocked}` : ""}</p>
-      <ul>
-        {#each s.upsides as u (u)}<li><span class="mark" aria-label="upside">+</span>{u}</li>{/each}
-        {#each s.downsides as d (d)}<li><span class="mark" aria-label="downside">−</span>{d}</li>{/each}
-      </ul>
-    </div>
   {/snippet}
 
   <div class="row aliases">
@@ -296,30 +357,5 @@
     border-radius: 4px;
     padding: 0 0.3rem;
     margin-right: 0.3rem;
-  }
-  .perf {
-    padding: 0.5rem 0;
-    border-top: 1px solid var(--border);
-    margin-top: 0.4rem;
-  }
-  .perf-head {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .perf p {
-    margin: 0.2rem 0;
-  }
-  .perf ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    font-size: 0.85rem;
-  }
-  .mark {
-    display: inline-block;
-    width: 1.1rem;
-    font-weight: 700;
-    color: var(--muted);
   }
 </style>

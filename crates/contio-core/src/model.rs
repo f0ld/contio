@@ -77,8 +77,14 @@ const MIB: u64 = 1024 * 1024;
 /// Resident memory of a llama.cpp model: weights, KV cache and compute buffers.
 /// Without a known geometry, assumes an 8B-class model (~64 KiB per token).
 pub fn estimate_memory(weight_bytes: u64, kv: Option<&KvGeometry>, context: Option<u32>) -> u64 {
+    estimate_memory_tuned(weight_bytes, kv, context, &Tuning::default())
+}
+
+/// [`estimate_memory`] with a quantized KV cache.
+pub fn estimate_memory_tuned(weight_bytes: u64, kv: Option<&KvGeometry>, context: Option<u32>, t: &Tuning) -> u64 {
     let ctx = context.unwrap_or(DEFAULT_CONTEXT);
-    let kv_bytes = kv.map_or(u64::from(ctx) * 64 * 1024, |g| g.bytes(ctx));
+    let (num, den) = t.kv_cache.unwrap_or_default().scale();
+    let kv_bytes = kv.map_or(u64::from(ctx) * 64 * 1024, |g| g.bytes(ctx)) * num / den;
     // compute buffers grow with model width; ~3% of the weights, at least 384 MiB
     let buffers = (weight_bytes * 3 / 100).max(384 * MIB);
     weight_bytes + kv_bytes + buffers
@@ -93,7 +99,7 @@ pub fn estimate_whisper_memory(weight_bytes: u64) -> u64 {
 /// Speculative decoding for llama.cpp models (docs/PERFORMANCE.md §1): guesses
 /// the next tokens cheaply and lets the model check them in one pass. Output is
 /// the same; it's faster when the guesses are right.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Speculative {
     /// Copy spans already in the context (`ngram-simple`): big win on edits, idle otherwise.
     #[serde(default)]
@@ -101,11 +107,72 @@ pub struct Speculative {
     /// The model's own multi-token-prediction layers (`draft-mtp`); needs a GGUF that has them.
     #[serde(default)]
     pub mtp: bool,
+    /// A smaller model with the same vocabulary drafts (`draft-simple`); pays off for dense models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<DraftModel>,
+}
+
+/// Another installed model used as the draft. The daemon fills in `path`
+/// from `id` when the setting is saved.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DraftModel {
+    pub id: String,
+    #[serde(default)]
+    pub path: PathBuf,
 }
 
 impl Speculative {
     pub fn is_off(&self) -> bool {
-        !self.ngram && !self.mtp
+        !self.ngram && !self.mtp && self.draft.is_none()
+    }
+}
+
+/// KV cache precision (`-ctk`/`-ctv`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KvCacheType {
+    #[default]
+    F16,
+    Q8_0,
+    Q4_0,
+}
+
+impl KvCacheType {
+    pub fn arg(self) -> &'static str {
+        match self {
+            Self::F16 => "f16",
+            Self::Q8_0 => "q8_0",
+            Self::Q4_0 => "q4_0",
+        }
+    }
+
+    /// Bytes relative to f16 (q8_0: 34 bytes per 32 values, q4_0: 18).
+    pub fn scale(self) -> (u64, u64) {
+        match self {
+            Self::F16 => (1, 1),
+            Self::Q8_0 => (34, 64),
+            Self::Q4_0 => (18, 64),
+        }
+    }
+}
+
+/// llama.cpp tuning knobs (docs/PERFORMANCE.md §2, §4); unset = llama.cpp's default.
+/// (A larger micro-batch was measured and left out: slower at depth, and it
+/// crashed the GPU on Vulkan at 96k.)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tuning {
+    /// KV cache precision (default f16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kv_cache: Option<KvCacheType>,
+    /// MoE models on the GPU: keep the expert weights of the first N layers in
+    /// system memory (`--n-cpu-moe`), to run models larger than the GPU pool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_moe_layers: Option<u32>,
+}
+
+impl Tuning {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -150,6 +217,8 @@ pub struct ModelProfile {
     pub extra_args: Vec<String>,
     #[serde(default, skip_serializing_if = "Speculative::is_off")]
     pub speculative: Speculative,
+    #[serde(default, skip_serializing_if = "Tuning::is_default")]
+    pub tuning: Tuning,
     /// For memory estimates; filled in from the catalog when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kv: Option<KvGeometry>,
@@ -171,6 +240,7 @@ impl ModelProfile {
             idle_ttl_secs: None,
             extra_args: Vec::new(),
             speculative: Speculative::default(),
+            tuning: Tuning::default(),
             kv: None,
             origin: None,
         }
@@ -226,11 +296,22 @@ pub struct ModelStatus {
     pub extra_args: Vec<String>,
     #[serde(default)]
     pub speculative: Speculative,
+    #[serde(default)]
+    pub tuning: Tuning,
     /// The model file has MTP layers (GGUF only).
     #[serde(default)]
     pub has_mtp: bool,
+    /// MoE layers with expert weights (GGUF), the range for MoE offload; 0 for dense models.
+    #[serde(default)]
+    pub moe_layers: u32,
+    /// Tokenizer vocabulary size (GGUF): draft models must match.
+    #[serde(default)]
+    pub vocab_size: Option<u64>,
     /// Estimated resident size used for pool budgeting.
     pub estimated_bytes: Option<u64>,
+    /// Part of the estimate in system memory although the model runs on the GPU (MoE offload).
+    #[serde(default)]
+    pub offloaded_bytes: Option<u64>,
     #[serde(flatten)]
     pub state: ModelState,
     /// Requests currently being served.
@@ -289,8 +370,12 @@ mod tests {
             idle_ttl_secs: None,
             extra_args: vec![],
             speculative: Speculative::default(),
+            tuning: Tuning::default(),
             has_mtp: false,
+            moe_layers: 0,
+            vocab_size: None,
             estimated_bytes: Some(1),
+            offloaded_bytes: None,
             state: ModelState::Ready { port: 4242 },
             in_flight: 0,
         };
@@ -315,6 +400,17 @@ mod tests {
         let e = estimate_memory(22_360_456_160, Some(&g), Some(32768));
         assert!(e > 21 * gib + gib / 2 && e < 23 * gib, "{e}");
         assert!(estimate_memory(gib, None, None) > estimate_memory(gib, Some(&g), None), "unknown = pessimistic");
+    }
+
+    #[test]
+    fn tuning_changes_the_estimate() {
+        let gib = 1u64 << 30;
+        let g = KvGeometry { full_bytes_per_token: 64 << 10, ..Default::default() };
+        let base = estimate_memory(10 * gib, Some(&g), Some(65536));
+        let q8 = Tuning { kv_cache: Some(KvCacheType::Q8_0), ..Default::default() };
+        let saved = base - estimate_memory_tuned(10 * gib, Some(&g), Some(65536), &q8);
+        assert!(saved > gib + gib / 2 && saved < 2 * gib, "4 GiB of f16 KV → ~2.1 GiB at q8_0: {saved}");
+        assert!(Tuning::default().is_default() && !q8.is_default());
     }
 
     #[test]

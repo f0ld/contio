@@ -52,11 +52,13 @@ pub fn models(models: &[ModelStatus]) -> String {
             if !m.managed {
                 notes.push(if m.overridden { "config, changed" } else { "config" });
             }
-            match (m.speculative.ngram, m.speculative.mtp) {
-                (true, true) => notes.push("spec: n-gram+MTP"),
-                (true, false) => notes.push("spec: n-gram"),
-                (false, true) => notes.push("spec: MTP"),
-                _ => {}
+            let spec: Vec<&str> = [(m.speculative.ngram, "n-gram"), (m.speculative.mtp, "MTP"), (m.speculative.draft.is_some(), "draft")]
+                .into_iter()
+                .filter_map(|(on, n)| on.then_some(n))
+                .collect();
+            let spec = (!spec.is_empty()).then(|| format!("spec: {}", spec.join("+")));
+            if let Some(s) = &spec {
+                notes.push(s);
             }
             [
                 m.id.clone(),
@@ -474,6 +476,32 @@ pub fn bench_detail(r: &Value) -> String {
             cc["requests"],
             num(cc["aggregate_tps"].as_f64(), 1),
             num(cc["per_request_decode_tps"].as_f64(), 1)
+        );
+    }
+    let rows: Vec<[String; 4]> = rep["perf"]["workloads"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|w| {
+            let drafts = match (w["draft_n"].as_u64(), w["draft_accepted"].as_u64()) {
+                (Some(n), Some(a)) if n > 0 => format!("{a}/{n} ({:.0}%)", a as f64 * 100.0 / n as f64),
+                _ => "-".into(),
+            };
+            [w["name"].as_str().unwrap_or("?").to_owned(), w["completion_tokens"].to_string(), num(w["decode_tps"].as_f64(), 1), drafts]
+        })
+        .collect();
+    if !rows.is_empty() {
+        let _ = writeln!(s, "\n{}", table(&["WORKLOAD", "TOKENS", "DECODE", "DRAFTS ACCEPTED"], &rows));
+    }
+    let f = &rep["perf"]["followup"];
+    if f.is_object() {
+        let _ = writeln!(
+            s,
+            "follow-up turn on {} tokens: first {} s, follow-up {} s ({} tokens from the cache)",
+            f["context_tokens"],
+            num(f["first_ttft_s"].as_f64(), 2),
+            num(f["followup_ttft_s"].as_f64(), 2),
+            f["cached_tokens"].as_u64().map_or("?".into(), |c| c.to_string())
         );
     }
     s.trim_end().to_owned()
@@ -973,7 +1001,11 @@ mod tests {
             idle_ttl_secs: None,
             extra_args: vec![],
             speculative: Default::default(),
+            tuning: Default::default(),
             has_mtp: false,
+            moe_layers: 0,
+            vocab_size: None,
+            offloaded_bytes: None,
             estimated_bytes: Some(24 * 1024 * 1024 * 1024),
             state,
             in_flight: 0,

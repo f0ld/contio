@@ -25,6 +25,10 @@ pub struct PerfOptions {
     pub reps: u32,
     /// Parallel requests for the throughput test; 0 skips it.
     pub concurrency: u32,
+    /// Agentic workloads (edit / code / prose) and a cached follow-up turn
+    /// (docs/PERFORMANCE.md): show speculative decoding and prompt-cache reuse.
+    #[serde(default)]
+    pub workloads: bool,
 }
 
 /// Prompt lengths longer than this (minus the generation) are skipped.
@@ -69,6 +73,9 @@ pub struct Sample {
     /// Energy of the whole request / generated tokens.
     pub joules_per_token: Option<f64>,
     pub finish_reason: Option<String>,
+    /// Prompt tokens the backend took from its cache.
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
 }
 
 impl Sample {
@@ -123,6 +130,33 @@ pub struct PerfReport {
     /// Measured prompt sizes: (characters, tokens) of the two calibration prompts.
     pub calibration: Vec<(usize, u32)>,
     pub concurrency: Option<ConcurrencyResult>,
+    #[serde(default)]
+    pub workloads: Vec<WorkloadResult>,
+    #[serde(default)]
+    pub followup: Option<FollowupResult>,
+}
+
+/// One realistic generation: what speculative decoding changes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkloadResult {
+    /// `edit` (return a file with a small change), `code` (new program), `prose`.
+    pub name: String,
+    pub completion_tokens: u32,
+    pub decode_tps: Option<f64>,
+    /// Speculative decoding: tokens drafted and accepted (llama.cpp `timings`).
+    pub draft_n: Option<u32>,
+    pub draft_accepted: Option<u32>,
+}
+
+/// An agent's next turn: the same conversation plus a short message. With a
+/// working prompt cache only the new tokens are read.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FollowupResult {
+    pub context_tokens: u32,
+    pub first_ttft_s: f64,
+    pub followup_ttft_s: f64,
+    /// Prompt tokens served from the cache in the follow-up.
+    pub cached_tokens: Option<u32>,
 }
 
 /// Progress reporting and cancellation, implemented by the caller's job.
@@ -198,6 +232,41 @@ pub async fn run(
         report.prompts.push(PromptResult { target_tokens: tokens, summary: summarize(&samples), samples });
     }
 
+    if opts.workloads {
+        for (name, text) in workloads() {
+            check()?;
+            progress.step(&format!("workload: {name}"));
+            let messages = json!([{ "role": "user", "content": text }]);
+            let (s, timings) =
+                or_cancel(progress, chat(http, target, &messages, WORKLOAD_TOKENS, Mode::Natural, monitor)).await?;
+            let n = |k: &str| timings[k].as_u64().map(|x| x as u32);
+            report.workloads.push(WorkloadResult {
+                name: name.to_owned(),
+                completion_tokens: s.completion_tokens,
+                decode_tps: s.best_decode_tps(),
+                draft_n: n("draft_n"),
+                draft_accepted: n("draft_n_accepted"),
+            });
+        }
+        let tokens = FOLLOWUP_CONTEXT.min(target.context.unwrap_or(u32::MAX).saturating_sub(1024));
+        if tokens >= 1024 {
+            check()?;
+            progress.step(&format!("follow-up turn on a {tokens}-token conversation"));
+            let first = json!([{ "role": "user", "content": prompt(cal.chars_for(tokens), nonce) }]);
+            let (a, _) = or_cancel(progress, chat(http, target, &first, 16, Mode::Cached, monitor)).await?;
+            let mut next = first.as_array().cloned().unwrap_or_default();
+            next.push(json!({ "role": "assistant", "content": "Understood." }));
+            next.push(json!({ "role": "user", "content": "Now give the story a title. Only the title." }));
+            let (b, _) = or_cancel(progress, chat(http, target, &Value::Array(next), 16, Mode::Cached, monitor)).await?;
+            report.followup = Some(FollowupResult {
+                context_tokens: a.prompt_tokens,
+                first_ttft_s: a.ttft_s,
+                followup_ttft_s: b.ttft_s,
+                cached_tokens: b.cached_tokens,
+            });
+        }
+    }
+
     if opts.concurrency > 1 {
         check()?;
         let n = opts.concurrency;
@@ -224,6 +293,50 @@ pub async fn run(
     Ok(report)
 }
 
+/// Generated tokens per workload; enough for speculation to show.
+const WORKLOAD_TOKENS: u32 = 600;
+/// Conversation length for the follow-up turn.
+const FOLLOWUP_CONTEXT: u32 = 8192;
+
+/// The edit fixture: a real 140-line source file.
+const EDIT_FIXTURE: &str = include_str!("../../../registry/bench/edit_fixture.rs.txt");
+
+fn workloads() -> [(&'static str, String); 3] {
+    [
+        (
+            "edit",
+            format!(
+                "Rename the function `check` to `check_packages` everywhere in this Rust file and return the \
+                 complete updated file, nothing else.\n\n```rust\n{EDIT_FIXTURE}\n```"
+            ),
+        ),
+        (
+            "code",
+            "Write a complete Python command-line program (argparse) that reads a CSV file and prints per-column \
+             summary statistics: count, missing values, min, max, mean for numeric columns, and the top 3 values \
+             for text columns. Include type hints and docstrings. Only the code."
+                .into(),
+        ),
+        (
+            "prose",
+            "Explain to a new developer how a hash map works internally: hashing, buckets, collisions, load \
+             factor and resizing. About 400 words, plain prose, no code."
+                .into(),
+        ),
+    ]
+}
+
+/// How a request treats the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Exactly `max_tokens`, never from the prompt cache (speed sweeps).
+    Exact,
+    /// Stop when the model is done, no prompt cache (workloads).
+    Natural,
+    /// Like a client: the prompt cache may serve the start of the conversation.
+    Cached,
+}
+
 /// One streamed chat request, timed and metered.
 pub async fn request(
     http: &reqwest::Client,
@@ -232,18 +345,35 @@ pub async fn request(
     max_tokens: u32,
     monitor: &Monitor,
 ) -> Result<Sample, String> {
+    let messages = json!([{ "role": "user", "content": prompt }]);
+    chat(http, target, &messages, max_tokens, Mode::Exact, monitor).await.map(|(s, _)| s)
+}
+
+/// A streamed chat request; also returns llama.cpp's `timings`.
+async fn chat(
+    http: &reqwest::Client,
+    target: &Target,
+    messages: &Value,
+    max_tokens: u32,
+    mode: Mode,
+    monitor: &Monitor,
+) -> Result<(Sample, Value), String> {
     let mut body = json!({
         "model": target.model,
-        "messages": [{ "role": "user", "content": prompt }],
+        "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0,
         "stream": true,
         "stream_options": { "include_usage": true },
     });
+    if mode != Mode::Exact {
+        target.apply_extra(&mut body); // e.g. thinking off
+    }
     if target.llama {
-        // decode exactly max_tokens, and never reuse a cached prompt
-        body["ignore_eos"] = json!(true);
-        body["cache_prompt"] = json!(false);
+        if mode == Mode::Exact {
+            body["ignore_eos"] = json!(true);
+        }
+        body["cache_prompt"] = json!(mode == Mode::Cached);
     }
     let start = monitor.now();
     let res = http
@@ -310,7 +440,7 @@ pub async fn request(
     let decode_s = end - first;
     let prefill_j = monitor.energy(start, first);
     let decode_j = monitor.energy(first, end);
-    Ok(Sample {
+    let sample = Sample {
         prompt_tokens,
         completion_tokens: completion,
         ttft_s: ttft,
@@ -324,7 +454,9 @@ pub async fn request(
         decode_joules: decode_j,
         joules_per_token: monitor.energy(start, end).filter(|_| completion > 0).map(|j| j / f64::from(completion)),
         finish_reason: finish,
-    })
+        cached_tokens: n(&usage["prompt_tokens_details"]["cached_tokens"]).or(n(&timings["cache_n"])),
+    };
+    Ok((sample, timings))
 }
 
 /// Prompt characters → tokens, as a line through two measurements.
@@ -435,13 +567,18 @@ mod tests {
             post(|axum::Json(req): axum::Json<Value>| async move {
                 let max = req["max_tokens"].as_u64().unwrap();
                 let prompt_len = req["messages"][0]["content"].as_str().unwrap().len() as u64;
-                assert_eq!(req["ignore_eos"], true);
+                // speed sweeps decode exactly max_tokens; workloads and follow-ups stop naturally
+                let natural = max == 600 || req["cache_prompt"] == true;
+                assert_eq!(req["ignore_eos"] == true, !natural);
+                let followup = req["messages"].as_array().unwrap().len() == 3;
                 let mut body = String::new();
                 for _ in 0..max {
                     body.push_str("data: {\"choices\":[{\"delta\":{\"content\":\"ü\"}}]}\n\n");
                 }
-                let usage = json!({"choices": [], "usage": {"prompt_tokens": prompt_len / 4, "completion_tokens": max},
-                    "timings": {"prompt_per_second": 500.0, "predicted_per_second": 25.0}});
+                let cached = if followup { prompt_len / 4 } else { 0 };
+                let usage = json!({"choices": [], "usage": {"prompt_tokens": prompt_len / 4, "completion_tokens": max,
+                        "prompt_tokens_details": {"cached_tokens": cached}},
+                    "timings": {"prompt_per_second": 500.0, "predicted_per_second": 25.0, "draft_n": 10, "draft_n_accepted": 8}});
                 body.push_str(&format!("data: {usage}\n\ndata: [DONE]\n\n"));
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 ([("content-type", "text/event-stream")], body)
@@ -461,7 +598,8 @@ mod tests {
     #[tokio::test]
     async fn runs_against_a_streaming_server() {
         let target = Target { base_url: mock_server().await, model: "m".into(), context: Some(2048), llama: true, extra: Default::default() };
-        let opts = PerfOptions { prompt_tokens: vec![256, 4096], gen_tokens: 16, reps: 2, concurrency: 3 };
+        let opts =
+            PerfOptions { prompt_tokens: vec![256, 4096], gen_tokens: 16, reps: 2, concurrency: 3, workloads: true };
         let monitor = Monitor::start(None);
         let r = run(&reqwest::Client::new(), &target, &opts, &monitor, &Quiet).await.unwrap();
         assert_eq!(r.skipped, [4096], "longer than the context");
@@ -474,6 +612,11 @@ mod tests {
         assert!(p.samples[0].decode_tps.is_some() && p.samples[0].ttft_s > 0.0);
         let c = r.concurrency.unwrap();
         assert_eq!((c.requests, c.completion_tokens), (3, 48));
+        let names: Vec<&str> = r.workloads.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["edit", "code", "prose"]);
+        assert_eq!((r.workloads[0].draft_n, r.workloads[0].draft_accepted), (Some(10), Some(8)));
+        let f = r.followup.expect("follow-up turn");
+        assert!(f.context_tokens > 900 && f.cached_tokens.is_some_and(|c| c > 900), "{f:?}");
         assert!(r.idle_watts.is_none(), "no sensor without a probe");
     }
 

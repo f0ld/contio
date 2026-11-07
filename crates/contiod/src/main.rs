@@ -5,6 +5,7 @@
 mod aliases;
 mod api;
 mod bench_api;
+mod boost;
 mod catalog_api;
 mod config;
 mod gateway;
@@ -131,6 +132,8 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_millis(args.metrics_interval_ms),
     );
     install_api::resume_interrupted(&state, interrupted);
+    boost::spawn(state.manager.clone(), state.registry.clone(), state.installer.jobs.clone(), state.metrics.clone());
+    preload_pinned(&state.manager);
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
@@ -163,6 +166,27 @@ async fn main() -> anyhow::Result<()> {
     reaper.abort();
     manager.shutdown().await;
     Ok(())
+}
+
+/// Start pinned models right away (docs/PERFORMANCE.md §4), one after the
+/// other, so the first request doesn't wait for a 5–20 s load.
+fn preload_pinned(manager: &ModelManager) {
+    let pinned: Vec<String> = manager.profiles().into_iter().filter(|p| p.pinned).map(|p| p.id).collect();
+    if pinned.is_empty() {
+        return;
+    }
+    let manager = manager.clone();
+    tokio::spawn(async move {
+        for id in pinned {
+            match manager.acquire(&id).await {
+                Ok(lease) => {
+                    drop(lease);
+                    tracing::info!(model = %id, "pinned model preloaded");
+                }
+                Err(e) => tracing::warn!(model = %id, "preloading pinned model failed: {e}"),
+            }
+        }
+    });
 }
 
 /// How long open requests (streams) may finish after a shutdown signal.

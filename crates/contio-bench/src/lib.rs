@@ -107,10 +107,20 @@ impl Preset {
 
     pub fn perf_options(self) -> PerfOptions {
         match self {
-            Self::Quick => PerfOptions { prompt_tokens: vec![512], gen_tokens: 64, reps: 1, concurrency: 0 },
-            Self::Standard => PerfOptions { prompt_tokens: vec![512, 4096], gen_tokens: 128, reps: 3, concurrency: 4 },
+            Self::Quick => {
+                PerfOptions { prompt_tokens: vec![512], gen_tokens: 64, reps: 1, concurrency: 0, workloads: false }
+            }
+            Self::Standard => {
+                PerfOptions { prompt_tokens: vec![512, 4096], gen_tokens: 128, reps: 3, concurrency: 4, workloads: true }
+            }
             Self::Full => {
-                PerfOptions { prompt_tokens: vec![512, 4096, 16384], gen_tokens: 256, reps: 5, concurrency: 4 }
+                PerfOptions {
+                    prompt_tokens: vec![512, 4096, 16384],
+                    gen_tokens: 256,
+                    reps: 5,
+                    concurrency: 4,
+                    workloads: true,
+                }
             }
         }
     }

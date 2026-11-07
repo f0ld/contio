@@ -102,6 +102,8 @@ export const checkPreflight = (backend: BackendId, method: InstallMethod, gpu_ap
 export const installBackend = (backend: BackendId, method: InstallMethod, gpu_api: GpuApi = "vulkan") =>
   send<{ job_id: number }>("/api/backends/install", "POST", { backend, method, gpu_api });
 
+export const fetchSettings = () => request<Settings>("/api/settings");
+
 export const saveSettings = (s: Settings) => send<Settings>("/api/settings", "PUT", s);
 
 export type ConnectionState = "connecting" | "open" | "closed";

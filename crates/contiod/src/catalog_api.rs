@@ -16,7 +16,7 @@ use contio_catalog::hf::{HfClient, LISTING_TTL, RepoInfo, valid_repo};
 use contio_catalog::quant::{Quant, RepoFile, RepoListing, bits_per_weight, quality_tier};
 use contio_catalog::{Catalog, CatalogModel, Family};
 use contio_core::hw::{DeviceKind, GpuApi, MemoryPoolKind};
-use contio_core::model::{KvGeometry, ModelKind, ModelOrigin, ModelProfile, ModelSource, Speculative};
+use contio_core::model::{KvGeometry, ModelKind, ModelOrigin, ModelProfile, ModelSource, Speculative, Tuning};
 use contio_install::download::{self, Remote};
 use contio_install::jobs::JobCtx;
 use contio_install::{BackendKind, FLM_DEFAULT_VERSION, LLAMACPP_DEFAULT_VERSION, Method, WHISPER_DEFAULT_VERSION};
@@ -978,6 +978,9 @@ pub struct ModelPatch {
     /// GGUF chat models: speculative decoding methods (all fields replaced).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speculative: Option<Speculative>,
+    /// GGUF models: llama.cpp tuning (all fields replaced; unset fields = default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuning: Option<Tuning>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1029,11 +1032,27 @@ impl ModelPatch {
             }
             p.gpu_api = g.api();
         }
-        if let Some(s) = self.speculative {
+        if let Some(s) = &self.speculative {
             if !matches!(p.source, ModelSource::Gguf { .. }) || p.kind != ModelKind::Chat {
                 return Err("speculative decoding is for GGUF chat models".into());
             }
-            p.speculative = s;
+            if s.draft.as_ref().is_some_and(|d| d.path.as_os_str().is_empty()) {
+                return Err("draft model without a file (resolved when saved)".into());
+            }
+            if s.ngram && s.draft.is_some() {
+                // reproducible with llama.cpp b12068: a request never finishes (docs/PERFORMANCE.md §1)
+                return Err("n-gram and a draft model can't be combined: llama.cpp hangs on some prompts; pick one".into());
+            }
+            p.speculative = s.clone();
+        }
+        if let Some(t) = self.tuning {
+            if !matches!(p.source, ModelSource::Gguf { .. }) {
+                return Err("tuning applies to GGUF models (llama.cpp)".into());
+            }
+            if t.cpu_moe_layers.is_some_and(|n| n > 0) && p.device != DeviceKind::Gpu {
+                return Err("MoE offload is for models on the GPU".into());
+            }
+            p.tuning = t;
         }
         Ok(())
     }
@@ -1046,15 +1065,21 @@ impl ModelPatch {
         self.device = newer.device.or(self.device);
         self.extra_args = newer.extra_args.clone().or(self.extra_args.take());
         self.gpu_api = newer.gpu_api.or(self.gpu_api);
-        self.speculative = newer.speculative.or(self.speculative);
+        self.speculative = newer.speculative.clone().or(self.speculative.take());
+        self.tuning = newer.tuning.or(self.tuning);
     }
 }
 
 pub async fn update_model(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
-    Json(patch): Json<ModelPatch>,
+    Json(mut patch): Json<ModelPatch>,
 ) -> Response {
+    if let Some(d) = patch.speculative.as_mut().and_then(|s| s.draft.as_mut())
+        && let Err(e) = resolve_draft(&state, &id, d)
+    {
+        return bad_request(&e);
+    }
     let mut p = match state.manager.profile(&id) {
         Ok(p) => p,
         Err(e) => return crate::gateway::backend_error(&e),
@@ -1067,7 +1092,12 @@ pub async fn update_model(
     {
         return bad_request(&format!("install the llama.cpp {api} build first (Backends)"));
     }
-    if patch.speculative.is_some_and(|s| s.mtp)
+    if patch.tuning.is_some_and(|t| t.cpu_moe_layers.is_some_and(|n| n > 0))
+        && !matches!(&p.source, ModelSource::Gguf { path, .. } if !contio_backends::expert_bytes_per_layer(path).is_empty())
+    {
+        return bad_request("MoE offload needs a MoE model (this one has no expert layers)");
+    }
+    if patch.speculative.as_ref().is_some_and(|s| s.mtp)
         && !matches!(&p.source, ModelSource::Gguf { path, .. } if contio_backends::has_mtp(path))
     {
         return bad_request("this model file has no MTP layers; install a variant that keeps them (often named `…-MTP-GGUF`)");
@@ -1082,6 +1112,33 @@ pub async fn update_model(
         tracing::error!("saving overrides: {e}");
     }
     Json(crate::api::statuses(&state).into_iter().find(|s| s.id == id)).into_response()
+}
+
+/// A draft model is another installed GGUF chat model: smaller, same vocabulary.
+fn resolve_draft(state: &AppState, id: &str, d: &mut contio_core::model::DraftModel) -> Result<(), String> {
+    let target = state.manager.profile(id).map_err(|e| e.to_string())?;
+    let draft = state.manager.profile(&d.id).map_err(|_| format!("no model `{}` to draft with", d.id))?;
+    let (ModelSource::Gguf { path: tp, .. }, ModelSource::Gguf { path: dp, .. }) = (&target.source, &draft.source) else {
+        return Err("both models must be GGUF (llama.cpp)".into());
+    };
+    if d.id == id {
+        return Err("a model can't draft for itself (that's what MTP is for)".into());
+    }
+    let (tv, dv) = (contio_backends::vocab_size(tp), contio_backends::vocab_size(dp));
+    if tv.is_none() || tv != dv {
+        return Err(format!(
+            "`{}` has a different vocabulary ({} vs {} tokens); drafts must use the same tokenizer",
+            d.id,
+            dv.map_or("?".into(), |v| v.to_string()),
+            tv.map_or("?".into(), |v| v.to_string())
+        ));
+    }
+    let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    if size(dp) >= size(tp) {
+        return Err(format!("`{}` isn't smaller than `{id}`; a draft must be much faster than the model", d.id));
+    }
+    d.path = dp.clone();
+    Ok(())
 }
 
 /// `DELETE /api/models/{id}/overrides`: back to the `config.toml` settings.

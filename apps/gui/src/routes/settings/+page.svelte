@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { errorText } from "$lib/daemon";
+  import PerfSetting from "$lib/components/PerfSetting.svelte";
+  import { errorText, fetchSettings, saveSettings } from "$lib/daemon";
+  import { PERF_SETTINGS } from "$lib/performance";
+  import type { Settings } from "$lib/types";
   import { daemonInfo, daemonStart, daemonStop, isDesktop, serviceSet, type DaemonInfo } from "$lib/desktop";
   import { live } from "$lib/live.svelte";
 
@@ -34,6 +37,20 @@
     void live.online;
     if (desktop) refresh();
   });
+
+  let settings = $state<Settings | null>(null);
+  $effect(() => {
+    if (live.online && !settings) fetchSettings().then((s) => (settings = s), (e) => (error = errorText(e)));
+  });
+
+  async function setServePower(v: Settings["serve_power"]) {
+    if (!settings) return;
+    try {
+      settings = await saveSettings({ ...settings, serve_power: v });
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
 
   const OWNER = {
     app: "started by this app; it stops when you close the window",
@@ -89,7 +106,36 @@
   {#if error}<p class="error-text">{error}</p>{/if}
 </section>
 
+{#if settings}
+  <section class="card">
+    <h2><span class="badge">Expert</span> Performance</h2>
+    <p class="sub">
+      Settings for the whole daemon. Per-model settings are in each model's editor. Measured on this laptop in
+      <code>docs/PERFORMANCE.md</code>.
+    </p>
+    <PerfSetting setting={PERF_SETTINGS.serve_power}>
+      <select value={settings.serve_power} onchange={(e) => setServePower(e.currentTarget.value as Settings["serve_power"])}>
+        <option value="off">Off</option>
+        <option value="on_ac">Only on AC power</option>
+        <option value="always">Always</option>
+      </select>
+    </PerfSetting>
+  </section>
+{/if}
+
 <style>
+  .badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    border-radius: 4px;
+    padding: 0 0.3rem;
+    margin-right: 0.3rem;
+    vertical-align: middle;
+  }
   .row {
     display: flex;
     align-items: center;

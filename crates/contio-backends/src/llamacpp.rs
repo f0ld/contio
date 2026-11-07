@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use contio_core::hw::{DeviceKind, GpuApi};
-use contio_core::model::{ModelKind, ModelProfile, ModelSource, estimate_memory};
+use contio_core::hw::{DeviceKind, GpuApi, MemoryPoolKind};
+use contio_core::model::{ModelKind, ModelProfile, ModelSource, estimate_memory_tuned};
 use tokio::process::Command;
 
 use crate::{Backend, BackendError};
@@ -50,15 +50,30 @@ impl LlamaCppBackend {
         }
     }
 
+    /// The draft model's file, if set and present.
+    fn draft_path(profile: &ModelProfile) -> Option<&Path> {
+        let d = profile.speculative.draft.as_ref()?;
+        if d.path.is_file() {
+            Some(&d.path)
+        } else {
+            tracing::warn!(model = %profile.id, draft = %d.id, "draft model file missing; drafting with it is off");
+            None
+        }
+    }
+
     /// `--spec-type` value for the profile; MTP only if the file has the layers.
     fn spec_types(profile: &ModelProfile) -> Option<String> {
-        let s = profile.speculative;
+        let s = &profile.speculative;
         let mtp = s.mtp && Self::gguf_path(profile).is_some_and(|p| crate::gguf::has_mtp(p));
         if s.mtp && !mtp {
             tracing::warn!(model = %profile.id, "MTP requested, but the model file has no MTP layers");
         }
+        // n-gram + draft model hangs llama.cpp b12068 on some prompts; the API refuses
+        // the pair, this guards hand-edited profiles: the draft model wins
+        let draft = Self::draft_path(profile).is_some();
+        let ngram = s.ngram && !draft;
         // n-gram first: draftless methods take precedence where they have a guess (docs/speculative.md)
-        let types: Vec<&str> = [(s.ngram, "ngram-simple"), (mtp, "draft-mtp")]
+        let types: Vec<&str> = [(ngram, "ngram-simple"), (mtp, "draft-mtp"), (draft, "draft-simple")]
             .into_iter()
             .filter_map(|(on, t)| on.then_some(t))
             .collect();
@@ -66,7 +81,15 @@ impl LlamaCppBackend {
     }
 
     /// `llama-server` arguments; paths and `host` differ between runtimes.
-    fn args(&self, profile: &ModelProfile, port: u16, model: &str, mmproj: Option<&str>, host: &str) -> Vec<String> {
+    fn args(
+        &self,
+        profile: &ModelProfile,
+        port: u16,
+        model: &str,
+        mmproj: Option<&str>,
+        draft: Option<&str>,
+        host: &str,
+    ) -> Vec<String> {
         let mut a: Vec<String> = vec![
             "--model".into(),
             model.to_owned(),
@@ -105,10 +128,23 @@ impl LlamaCppBackend {
                 }
             }
         }
+        if profile.device == DeviceKind::Gpu
+            && let Some(n) = profile.tuning.cpu_moe_layers.filter(|&n| n > 0)
+        {
+            a.extend(["--n-cpu-moe".into(), n.to_string()]);
+        }
+        if let Some(t) = profile.tuning.kv_cache {
+            a.extend(["--cache-type-k".into(), t.arg().into(), "--cache-type-v".into(), t.arg().into()]);
+        }
         if profile.kind == ModelKind::Chat
             && let Some(types) = Self::spec_types(profile)
         {
             a.extend(["--spec-type".into(), types]);
+            if let Some(d) = draft {
+                // on the model's own device
+                let gpu_layers = if profile.device == DeviceKind::Gpu { "999" } else { "0" };
+                a.extend(["--model-draft".into(), d.to_owned(), "--gpu-layers-draft".into(), gpu_layers.into()]);
+            }
         }
         a.extend(profile.extra_args.iter().cloned());
         a
@@ -145,6 +181,10 @@ impl LlamaCppBackend {
                 format!("/mmproj/{}", file_name(m))
             }
         });
+        let draft = Self::draft_path(profile).map(|d| {
+            a.extend(["--volume".into(), format!("{}:/draft:ro", parent(d).display())]);
+            format!("/draft/{}", file_name(d))
+        });
         if profile.device == DeviceKind::Gpu {
             a.extend(["--device".into(), "/dev/dri".into()]);
             if self.config.gpu_api == GpuApi::Rocm {
@@ -152,7 +192,7 @@ impl LlamaCppBackend {
             }
         }
         a.push(image.to_owned());
-        a.extend(self.args(profile, port, &format!("/models/{file}"), mmproj.as_deref(), "0.0.0.0"));
+        a.extend(self.args(profile, port, &format!("/models/{file}"), mmproj.as_deref(), draft.as_deref(), "0.0.0.0"));
         a
     }
 }
@@ -229,7 +269,15 @@ impl Backend for LlamaCppBackend {
                 }
                 let mut cmd = Command::new(bin);
                 let mmproj = Self::mmproj_path(profile).map(|m| m.display().to_string());
-                cmd.args(self.args(profile, port, &path.display().to_string(), mmproj.as_deref(), "127.0.0.1"));
+                let draft = Self::draft_path(profile).map(|d| d.display().to_string());
+                cmd.args(self.args(
+                    profile,
+                    port,
+                    &path.display().to_string(),
+                    mmproj.as_deref(),
+                    draft.as_deref(),
+                    "127.0.0.1",
+                ));
                 Ok(cmd)
             }
             LlamaRuntime::Podman { image } => {
@@ -254,7 +302,23 @@ impl Backend for LlamaCppBackend {
         if let Some(m) = Self::mmproj_path(profile) {
             weights += std::fs::metadata(m).map(|m| m.len()).unwrap_or(0);
         }
-        Some(estimate_memory(weights, profile.kv.as_ref(), profile.context))
+        // a draft model: its weights plus a small context and buffers
+        let draft = Self::draft_path(profile).and_then(gguf_bytes).map_or(0, |b| b + 256 * 1024 * 1024);
+        Some(estimate_memory_tuned(weights, profile.kv.as_ref(), profile.context, &profile.tuning) + draft)
+    }
+
+    /// MoE offload: the experts of the first N layers live in system memory.
+    fn estimate_pools(&self, profile: &ModelProfile) -> Vec<(MemoryPoolKind, u64)> {
+        let Some(total) = self.estimate_bytes(profile) else { return Vec::new() };
+        let n = profile.tuning.cpu_moe_layers.unwrap_or(0) as usize;
+        let offloaded: u64 = match (profile.device, Self::gguf_path(profile)) {
+            (DeviceKind::Gpu, Some(path)) if n > 0 => crate::gguf::expert_bytes_per_layer(path).iter().take(n).sum(),
+            _ => 0,
+        };
+        if offloaded == 0 {
+            return vec![(profile.pool(), total)];
+        }
+        vec![(MemoryPoolKind::Gpu, total.saturating_sub(offloaded)), (MemoryPoolKind::System, offloaded)]
     }
 }
 
@@ -286,7 +350,8 @@ mod tests {
     }
 
     fn native_args(p: &ModelProfile) -> String {
-        backend().args(p, 40001, "/m/q.gguf", None, "127.0.0.1").join(" ")
+        let draft = LlamaCppBackend::draft_path(p).map(|d| d.display().to_string());
+        backend().args(p, 40001, "/m/q.gguf", None, draft.as_deref(), "127.0.0.1").join(" ")
     }
 
     #[test]
@@ -384,9 +449,33 @@ mod tests {
         assert!(native_args(&p).contains("--spec-type ngram-simple "), "no MTP layers: MTP is skipped");
         p.speculative.ngram = false;
         assert!(!native_args(&p).contains("--spec-type"));
-        p.speculative = contio_core::model::Speculative { ngram: true, mtp: false };
+        p.speculative = contio_core::model::Speculative { ngram: true, ..Default::default() };
         p.kind = ModelKind::Embedding;
         assert!(!native_args(&p).contains("--spec-type"), "chat models only");
+
+        let draft = d.path().join("draft.gguf");
+        crate::gguf::tests::write_gguf(&draft, None);
+        p.kind = ModelKind::Chat;
+        p.speculative = contio_core::model::Speculative {
+            ngram: true, // dropped: n-gram + draft hangs llama.cpp
+            draft: Some(contio_core::model::DraftModel { id: "small".into(), path: draft.clone() }),
+            ..Default::default()
+        };
+        let a = native_args(&p);
+        assert!(a.contains(&format!("--spec-type draft-simple --model-draft {} --gpu-layers-draft 999", draft.display())), "{a}");
+        p.speculative.draft.as_mut().unwrap().path = d.path().join("gone.gguf");
+        let a = native_args(&p);
+        assert!(a.contains("--spec-type ngram-simple ") && !a.contains("--model-draft"), "missing draft: n-gram again: {a}");
+    }
+
+    #[test]
+    fn tuning_args() {
+        let mut p = profile(DeviceKind::Gpu);
+        p.extra_args.clear();
+        assert!(!native_args(&p).contains("--cache-type-k"));
+        p.tuning.kv_cache = Some(contio_core::model::KvCacheType::Q8_0);
+        let a = native_args(&p);
+        assert!(a.contains("--cache-type-k q8_0 --cache-type-v q8_0"), "{a}");
     }
 
     #[test]

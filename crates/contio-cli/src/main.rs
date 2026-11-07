@@ -113,8 +113,14 @@ enum Command {
         /// Speculative decoding, comma-separated: ngram, mtp, or off (docs/PERFORMANCE.md).
         #[arg(long, value_delimiter = ',', value_parser = ["ngram", "mtp", "off"])]
         spec: Option<Vec<String>>,
+        /// KV cache precision.
+        #[arg(long, value_parser = ["f16", "q8_0", "q4_0"])]
+        kv_cache: Option<String>,
+        /// MoE on the GPU: keep the experts of the first N layers in system memory (0 = off).
+        #[arg(long)]
+        cpu_moe: Option<u32>,
         /// config.toml models: drop the changes made here and use the file's settings.
-        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl", "gpu", "spec"])]
+        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl", "gpu", "spec", "kv_cache", "cpu_moe"])]
         reset: bool,
     },
     /// Load a model (and keep it loaded until idle/evicted).
@@ -402,12 +408,27 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             client.delete(&format!("/api/models/{}/overrides", urlencode(&model))).await?;
             eprintln!("{model} uses its config.toml settings again (restarts on next use if it was loaded)");
         }
-        Command::Set { model, context, pin, unpin, device, idle_ttl, gpu, spec, reset: false } => {
+        Command::Set { model, context, pin, unpin, device, idle_ttl, gpu, spec, kv_cache, cpu_moe, reset: false } => {
             let pinned = if pin { Some(true) } else if unpin { Some(false) } else { None };
             let spec = spec.map(|s| json!({ "ngram": s.iter().any(|x| x == "ngram"), "mtp": s.iter().any(|x| x == "mtp") }));
+            // tuning is replaced as a whole: start from the model's current values
+            let tuning = if kv_cache.is_some() || cpu_moe.is_some() {
+                let models = client.get("/api/models").await?;
+                let current = models.as_array().into_iter().flatten().find(|m| m["id"] == model.as_str());
+                let mut t = current.map(|m| m["tuning"].clone()).filter(Value::is_object).unwrap_or_else(|| json!({}));
+                if let Some(k) = kv_cache {
+                    t["kv_cache"] = if k == "f16" { Value::Null } else { json!(k) };
+                }
+                if let Some(n) = cpu_moe {
+                    t["cpu_moe_layers"] = if n == 0 { Value::Null } else { json!(n) };
+                }
+                Some(t)
+            } else {
+                None
+            };
             let body = json!({
                 "context": context, "pinned": pinned, "device": device, "idle_ttl_secs": idle_ttl, "gpu_api": gpu,
-                "speculative": spec,
+                "speculative": spec, "tuning": tuning,
             });
             let body = Value::Object(body.as_object().cloned().unwrap_or_default().into_iter().filter(|(_, v)| !v.is_null()).collect());
             if body.as_object().is_some_and(|o| o.is_empty()) {

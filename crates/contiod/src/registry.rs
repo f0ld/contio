@@ -24,6 +24,8 @@ pub struct Settings {
     pub whisper_method: Method,
     /// GPU API for GGUF models on the GPU that don't pick one (m0-gpu.md §8: Vulkan is faster overall).
     pub gpu_api: GpuApi,
+    /// Hold the `performance` power profile while a model works (docs/PERFORMANCE.md §2e).
+    pub serve_power: crate::boost::ServePower,
 }
 
 impl Default for Settings {
@@ -34,6 +36,7 @@ impl Default for Settings {
             flm_method: Method::Source,
             whisper_method: Method::Source,
             gpu_api: GpuApi::Vulkan,
+            serve_power: crate::boost::ServePower::Off,
         }
     }
 }

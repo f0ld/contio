@@ -393,6 +393,31 @@
         <p class="sub">{c.requests} parallel requests: {n(c.aggregate_tps)} tok/s total, {n(c.per_request_decode_tps)} tok/s per request while generating</p>
       {/if}
       {#if perfReport.perf.skipped.length}<p class="sub">Skipped (longer than the context): {perfReport.perf.skipped.join(", ")} tokens</p>{/if}
+      {#if perfReport.perf.workloads?.length}
+        <table class="list">
+          <thead>
+            <tr><th>Workload</th><th class="num">Tokens</th><th class="num">Decode tok/s</th><th class="num">Drafts accepted</th></tr>
+          </thead>
+          <tbody>
+            {#each perfReport.perf.workloads as w (w.name)}
+              <tr>
+                <td>{w.name}</td>
+                <td class="num">{w.completion_tokens}</td>
+                <td class="num">{n(w.decode_tps)}</td>
+                <td class="num">{w.draft_n ? `${w.draft_accepted}/${w.draft_n} (${pct((w.draft_accepted ?? 0) / w.draft_n)})` : "–"}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <p class="sub">Speculative decoding shows here: edit repeats the input, code and prose don't.</p>
+      {/if}
+      {#if perfReport.perf.followup}
+        {@const f = perfReport.perf.followup}
+        <p class="sub">
+          Follow-up turn on a {f.context_tokens}-token conversation: first answer after {n(f.first_ttft_s, 2)} s, the
+          follow-up after {n(f.followup_ttft_s, 2)} s ({f.cached_tokens ?? "?"} tokens from the prompt cache).
+        </p>
+      {/if}
     {/if}
 
     {#if toolsReport}

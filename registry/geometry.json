@@ -519,10 +519,36 @@
   "reasoning": true,
   "probed": "Qwen3.6-27B-UD-Q4_K_XL.gguf"
  },
+ "unsloth/Qwen3.6-27B-MTP-GGUF": {
+  "arch": "qwen35",
+  "context_length": 262144,
+  "params": 27320697856,
+  "kv": {
+   "full_bytes_per_token": 65536,
+   "swa_bytes_per_token": 0,
+   "swa_window": 0
+  },
+  "tools": true,
+  "reasoning": true,
+  "probed": "Qwen3.6-27B-UD-Q4_K_XL.gguf"
+ },
  "unsloth/Qwen3.6-35B-A3B-GGUF": {
   "arch": "qwen35moe",
   "context_length": 262144,
   "params": 34660610688,
+  "kv": {
+   "full_bytes_per_token": 20480,
+   "swa_bytes_per_token": 0,
+   "swa_window": 0
+  },
+  "tools": true,
+  "reasoning": true,
+  "probed": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+ },
+ "unsloth/Qwen3.6-35B-A3B-MTP-GGUF": {
+  "arch": "qwen35moe",
+  "context_length": 262144,
+  "params": 35505251456,
   "kv": {
    "full_bytes_per_token": 20480,
    "swa_bytes_per_token": 0,

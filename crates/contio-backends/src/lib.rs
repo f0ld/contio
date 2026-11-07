@@ -15,12 +15,12 @@ mod whisper;
 
 use std::path::PathBuf;
 
-use contio_core::hw::GpuApi;
+use contio_core::hw::{GpuApi, MemoryPoolKind};
 use contio_core::model::ModelProfile;
 use tokio::process::Command;
 
 pub use flm::{FlmBackend, FlmConfig};
-pub use gguf::has_mtp;
+pub use gguf::{expert_bytes_per_layer, has_mtp, vocab_size};
 pub use instance::{Instance, stop_orphans};
 pub use llamacpp::{LlamaCppBackend, LlamaCppConfig, LlamaRuntime};
 pub use manager::{Lease, ManagerConfig, ModelManager};
@@ -59,6 +59,12 @@ pub trait Backend: Send + Sync {
     /// Resident memory estimate used for pool budgeting, if known.
     fn estimate_bytes(&self, _profile: &ModelProfile) -> Option<u64> {
         None
+    }
+
+    /// The estimate per memory pool; a model may span both (MoE experts kept
+    /// in system memory). Empty if unknown.
+    fn estimate_pools(&self, profile: &ModelProfile) -> Vec<(MemoryPoolKind, u64)> {
+        self.estimate_bytes(profile).map(|b| vec![(profile.pool(), b)]).unwrap_or_default()
     }
 }
 

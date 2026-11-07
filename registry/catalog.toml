@@ -129,19 +129,19 @@ tags = ["code"]
 id = "qwen3.6-35b-a3b"
 family = "qwen"
 name = "Qwen3.6 35B-A3B"
-repo = "unsloth/Qwen3.6-35B-A3B-GGUF"
+repo = "unsloth/Qwen3.6-35B-A3B-MTP-GGUF"
 active_b = 3
 recommended = "UD-Q4_K_XL"
 context = 32768
 tags = ["code"]
 flm = ["qwen3.6-moe:35b-a3b"]
-notes = "Fastest capable agent model on the Radeon 890M (docs/spikes/m0-gpu.md)."
+notes = "Fastest capable agent model on the Radeon 890M (docs/spikes/m0-gpu.md). MTP variant: turn on speculative decoding (MTP + n-gram) under Expert → Performance (docs/PERFORMANCE.md)."
 
 [[models]]
 id = "qwen3.6-27b"
 family = "qwen"
 name = "Qwen3.6 27B"
-repo = "unsloth/Qwen3.6-27B-GGUF"
+repo = "unsloth/Qwen3.6-27B-MTP-GGUF"
 recommended = "UD-Q4_K_XL"
 context = 32768
 tags = ["code"]

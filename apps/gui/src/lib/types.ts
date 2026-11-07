@@ -103,16 +103,31 @@ export type ModelStatus = {
   idle_ttl_secs: number | null;
   extra_args: string[];
   speculative: Speculative;
+  tuning: Tuning;
   /** The model file has MTP layers (GGUF). */
   has_mtp: boolean;
+  /** MoE layers with experts; 0 for dense models. */
+  moe_layers: number;
+  /** Tokenizer vocabulary size (GGUF); a draft model must match. */
+  vocab_size: number | null;
+  /** Part of the estimate in system memory (MoE offload). */
+  offloaded_bytes: number | null;
   estimated_bytes: number | null;
   in_flight: number;
 } & ModelState;
+
+/** llama.cpp tuning; unset = llama.cpp default. */
+export interface Tuning {
+  kv_cache?: "f16" | "q8_0" | "q4_0" | null;
+  cpu_moe_layers?: number | null;
+}
 
 /** Speculative decoding methods (docs/PERFORMANCE.md §1). */
 export interface Speculative {
   ngram: boolean;
   mtp: boolean;
+  /** Another installed model drafts; the daemon fills in `path`. */
+  draft?: { id: string; path?: string } | null;
 }
 
 // Mirrors crates/contiod/src/aliases.rs.
@@ -133,6 +148,7 @@ export interface ModelPatch {
   extra_args?: string[];
   gpu_api?: GpuApi | "default";
   speculative?: Speculative;
+  tuning?: Tuning;
 }
 
 // Mirrors crates/contiod/src/catalog_api.rs.
@@ -307,6 +323,7 @@ export interface Settings {
   whisper_method: InstallMethod;
   /** Default GPU API for GGUF models that don't pick one. */
   gpu_api: GpuApi;
+  serve_power: "off" | "always" | "on_ac";
 }
 
 export interface BackendsInfo {
@@ -396,6 +413,15 @@ export interface PerfReportView {
     prompts: { target_tokens: number; summary: PerfSummary; samples: unknown[] }[];
     skipped: number[];
     concurrency: { requests: number; aggregate_tps: number; per_request_decode_tps: number | null } | null;
+    /** Agentic workloads (standard/full presets). */
+    workloads?: {
+      name: string;
+      completion_tokens: number;
+      decode_tps: number | null;
+      draft_n: number | null;
+      draft_accepted: number | null;
+    }[];
+    followup?: { context_tokens: number; first_ttft_s: number; followup_ttft_s: number; cached_tokens: number | null } | null;
   };
 }
 

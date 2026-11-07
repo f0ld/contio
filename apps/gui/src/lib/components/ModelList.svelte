@@ -133,7 +133,7 @@
           {#if editing === m.id}
             <tr class="edit-row">
               <td colspan="7">
-                <ModelEditor model={m} {aliases} onchange={refresh} onclose={() => (editing = null)} />
+                <ModelEditor model={m} {models} {aliases} onchange={refresh} onclose={() => (editing = null)} />
               </td>
             </tr>
           {/if}
