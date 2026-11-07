@@ -40,3 +40,10 @@ Optional config: `~/.config/contio/config.toml` (`docs/config.example.toml`).
 scripts/release.sh 0.4.0              # sets the version everywhere, commits, tags v0.4.0
 git push origin main v0.4.0           # GitHub Actions builds the AppImage and publishes the release
 ```
+
+## License
+
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+Unless you state otherwise, any contribution you submit for inclusion in contio is dual licensed as above, without additional terms.
+
+Benchmark data from GSM8K, HumanEval, MMLU-Pro and LibriSpeech keeps its own license; see [THIRD_PARTY.md](THIRD_PARTY.md).

@@ -8,6 +8,7 @@ version = "0.3.3"
 edition = "2024"
 rust-version = "1.88"
 publish = false
+license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 contio-core = { path = "crates/contio-core" }
