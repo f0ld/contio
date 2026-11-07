@@ -52,6 +52,12 @@ pub fn models(models: &[ModelStatus]) -> String {
             if !m.managed {
                 notes.push(if m.overridden { "config, changed" } else { "config" });
             }
+            match (m.speculative.ngram, m.speculative.mtp) {
+                (true, true) => notes.push("spec: n-gram+MTP"),
+                (true, false) => notes.push("spec: n-gram"),
+                (false, true) => notes.push("spec: MTP"),
+                _ => {}
+            }
             [
                 m.id.clone(),
                 device,
@@ -966,6 +972,8 @@ mod tests {
             pinned: id == "a",
             idle_ttl_secs: None,
             extra_args: vec![],
+            speculative: Default::default(),
+            has_mtp: false,
             estimated_bytes: Some(24 * 1024 * 1024 * 1024),
             state,
             in_flight: 0,

@@ -7,6 +7,7 @@
 //! running ([`ModelManager`]).
 
 mod flm;
+mod gguf;
 mod instance;
 mod llamacpp;
 mod manager;
@@ -19,6 +20,7 @@ use contio_core::model::ModelProfile;
 use tokio::process::Command;
 
 pub use flm::{FlmBackend, FlmConfig};
+pub use gguf::has_mtp;
 pub use instance::{Instance, stop_orphans};
 pub use llamacpp::{LlamaCppBackend, LlamaCppConfig, LlamaRuntime};
 pub use manager::{Lease, ManagerConfig, ModelManager};

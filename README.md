@@ -41,6 +41,11 @@ scripts/release.sh 0.4.0              # sets the version everywhere, commits, ta
 git push origin main v0.4.0           # GitHub Actions builds the AppImage and publishes the release
 ```
 
+## Performance
+
+`docs/PERFORMANCE.md` is the performance roadmap: each item is measured on this hardware before it ships
+as a setting under **Expert → Performance** in the model editor (or `contio set <model> --spec ngram,mtp`).
+
 ## License
 
 Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.

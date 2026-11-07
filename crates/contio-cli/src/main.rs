@@ -110,8 +110,11 @@ enum Command {
         /// GGUF on the GPU: llama.cpp build to run on (default = the daemon setting).
         #[arg(long, value_parser = ["vulkan", "rocm", "default"])]
         gpu: Option<String>,
+        /// Speculative decoding, comma-separated: ngram, mtp, or off (docs/PERFORMANCE.md).
+        #[arg(long, value_delimiter = ',', value_parser = ["ngram", "mtp", "off"])]
+        spec: Option<Vec<String>>,
         /// config.toml models: drop the changes made here and use the file's settings.
-        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl", "gpu"])]
+        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl", "gpu", "spec"])]
         reset: bool,
     },
     /// Load a model (and keep it loaded until idle/evicted).
@@ -399,10 +402,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             client.delete(&format!("/api/models/{}/overrides", urlencode(&model))).await?;
             eprintln!("{model} uses its config.toml settings again (restarts on next use if it was loaded)");
         }
-        Command::Set { model, context, pin, unpin, device, idle_ttl, gpu, reset: false } => {
+        Command::Set { model, context, pin, unpin, device, idle_ttl, gpu, spec, reset: false } => {
             let pinned = if pin { Some(true) } else if unpin { Some(false) } else { None };
+            let spec = spec.map(|s| json!({ "ngram": s.iter().any(|x| x == "ngram"), "mtp": s.iter().any(|x| x == "mtp") }));
             let body = json!({
                 "context": context, "pinned": pinned, "device": device, "idle_ttl_secs": idle_ttl, "gpu_api": gpu,
+                "speculative": spec,
             });
             let body = Value::Object(body.as_object().cloned().unwrap_or_default().into_iter().filter(|(_, v)| !v.is_null()).collect());
             if body.as_object().is_some_and(|o| o.is_empty()) {

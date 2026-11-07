@@ -90,6 +90,25 @@ pub fn estimate_whisper_memory(weight_bytes: u64) -> u64 {
     weight_bytes + (weight_bytes / 5).max(256 * MIB)
 }
 
+/// Speculative decoding for llama.cpp models (docs/PERFORMANCE.md §1): guesses
+/// the next tokens cheaply and lets the model check them in one pass. Output is
+/// the same; it's faster when the guesses are right.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Speculative {
+    /// Copy spans already in the context (`ngram-simple`): big win on edits, idle otherwise.
+    #[serde(default)]
+    pub ngram: bool,
+    /// The model's own multi-token-prediction layers (`draft-mtp`); needs a GGUF that has them.
+    #[serde(default)]
+    pub mtp: bool,
+}
+
+impl Speculative {
+    pub fn is_off(&self) -> bool {
+        !self.ngram && !self.mtp
+    }
+}
+
 /// Where an installed model came from (shown in the GUI, used for updates).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelOrigin {
@@ -129,6 +148,8 @@ pub struct ModelProfile {
     /// Extra command-line arguments passed to the backend verbatim.
     #[serde(default)]
     pub extra_args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Speculative::is_off")]
+    pub speculative: Speculative,
     /// For memory estimates; filled in from the catalog when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kv: Option<KvGeometry>,
@@ -149,6 +170,7 @@ impl ModelProfile {
             pinned: false,
             idle_ttl_secs: None,
             extra_args: Vec::new(),
+            speculative: Speculative::default(),
             kv: None,
             origin: None,
         }
@@ -202,6 +224,11 @@ pub struct ModelStatus {
     pub pinned: bool,
     pub idle_ttl_secs: Option<u64>,
     pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub speculative: Speculative,
+    /// The model file has MTP layers (GGUF only).
+    #[serde(default)]
+    pub has_mtp: bool,
     /// Estimated resident size used for pool budgeting.
     pub estimated_bytes: Option<u64>,
     #[serde(flatten)]
@@ -261,6 +288,8 @@ mod tests {
             pinned: false,
             idle_ttl_secs: None,
             extra_args: vec![],
+            speculative: Speculative::default(),
+            has_mtp: false,
             estimated_bytes: Some(1),
             state: ModelState::Ready { port: 4242 },
             in_flight: 0,

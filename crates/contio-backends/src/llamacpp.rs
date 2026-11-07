@@ -50,6 +50,21 @@ impl LlamaCppBackend {
         }
     }
 
+    /// `--spec-type` value for the profile; MTP only if the file has the layers.
+    fn spec_types(profile: &ModelProfile) -> Option<String> {
+        let s = profile.speculative;
+        let mtp = s.mtp && Self::gguf_path(profile).is_some_and(|p| crate::gguf::has_mtp(p));
+        if s.mtp && !mtp {
+            tracing::warn!(model = %profile.id, "MTP requested, but the model file has no MTP layers");
+        }
+        // n-gram first: draftless methods take precedence where they have a guess (docs/speculative.md)
+        let types: Vec<&str> = [(s.ngram, "ngram-simple"), (mtp, "draft-mtp")]
+            .into_iter()
+            .filter_map(|(on, t)| on.then_some(t))
+            .collect();
+        (!types.is_empty()).then(|| types.join(","))
+    }
+
     /// `llama-server` arguments; paths and `host` differ between runtimes.
     fn args(&self, profile: &ModelProfile, port: u16, model: &str, mmproj: Option<&str>, host: &str) -> Vec<String> {
         let mut a: Vec<String> = vec![
@@ -89,6 +104,11 @@ impl LlamaCppBackend {
                     a.extend(["--threads".into(), t.to_string()]);
                 }
             }
+        }
+        if profile.kind == ModelKind::Chat
+            && let Some(types) = Self::spec_types(profile)
+        {
+            a.extend(["--spec-type".into(), types]);
         }
         a.extend(profile.extra_args.iter().cloned());
         a
@@ -345,6 +365,28 @@ mod tests {
         p.source = ModelSource::Gguf { path: "/data/gguf/q.gguf".into(), mmproj: Some("/other/mm.gguf".into()) };
         let a = backend().podman_args("img", &p, 1, Path::new("/data/gguf/q.gguf")).join(" ");
         assert!(a.contains("--volume /other:/mmproj:ro") && a.contains("--mmproj /mmproj/mm.gguf"));
+    }
+
+    #[test]
+    fn speculative_decoding_args() {
+        let d = tempfile::tempdir().unwrap();
+        let (mtp_file, plain) = (d.path().join("mtp.gguf"), d.path().join("plain.gguf"));
+        crate::gguf::tests::write_gguf(&mtp_file, Some(1));
+        crate::gguf::tests::write_gguf(&plain, None);
+        let mut p = profile(DeviceKind::Gpu);
+        p.source = ModelSource::Gguf { path: mtp_file, mmproj: None };
+        assert!(!native_args(&p).contains("--spec-type"), "off by default");
+        p.speculative.ngram = true;
+        assert!(native_args(&p).contains("--spec-type ngram-simple --cache-type-k"), "before extra args");
+        p.speculative.mtp = true;
+        assert!(native_args(&p).contains("--spec-type ngram-simple,draft-mtp"));
+        p.source = ModelSource::Gguf { path: plain, mmproj: None };
+        assert!(native_args(&p).contains("--spec-type ngram-simple "), "no MTP layers: MTP is skipped");
+        p.speculative.ngram = false;
+        assert!(!native_args(&p).contains("--spec-type"));
+        p.speculative = contio_core::model::Speculative { ngram: true, mtp: false };
+        p.kind = ModelKind::Embedding;
+        assert!(!native_args(&p).contains("--spec-type"), "chat models only");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { deleteAlias, errorText, fetchBackends, formatContext, resetOverrides, setAlias, updateModel } from "$lib/daemon";
+  import { PERF_SETTINGS } from "$lib/performance";
   import type { Alias, BackendsInfo, GpuApi, ModelPatch, ModelStatus } from "$lib/types";
 
   /** Launch settings and aliases of one model. Changes to config.toml models are saved as overrides. */
@@ -24,6 +25,10 @@
   if (isGguf) fetchBackends().then((b) => (backends = b), () => {});
   const hasBuild = (api: GpuApi) => backends?.registered.some((r) => r.startsWith(`llama.cpp ${api === "rocm" ? "ROCm" : "Vulkan"}`));
   const API_NAME = { vulkan: "Vulkan", rocm: "ROCm" } as const;
+  let ngram = $state(initial.speculative?.ngram ?? false);
+  let mtp = $state(initial.speculative?.mtp ?? false);
+  const speculative = isGguf && initial.kind === "chat";
+  const hasExpert = isGguf;
   let saving = $state(false);
   let error = $state<string | null>(null);
   let newAlias = $state("");
@@ -42,6 +47,8 @@
     const args = extraArgs.split(/\s+/).filter(Boolean);
     if (args.join(" ") !== initial.extra_args.join(" ")) p.extra_args = args;
     if (gpuApi !== (initial.gpu_api ?? "default")) p.gpu_api = gpuApi;
+    if (ngram !== (initial.speculative?.ngram ?? false) || mtp !== (initial.speculative?.mtp ?? false))
+      p.speculative = { ngram, mtp };
     return p;
   }
   let dirty = $derived(Object.keys(changes()).length > 0);
@@ -113,18 +120,6 @@
         <span>{model.device.toUpperCase()}</span>
       {/if}
     </label>
-    {#if isGguf && device === "gpu"}
-      <label title="llama.cpp build for this model. Vulkan writes answers faster, ROCm reads long prompts faster.">
-        GPU backend
-        <select bind:value={gpuApi}>
-          <option value="default">Default{backends ? ` (${API_NAME[backends.settings.gpu_api]})` : ""}</option>
-          <option value="vulkan">Vulkan</option>
-          <option value="rocm" disabled={backends !== null && !hasBuild("rocm") && initial.gpu_api !== "rocm"}>
-            ROCm{backends && !hasBuild("rocm") ? " (not installed)" : ""}
-          </option>
-        </select>
-      </label>
-    {/if}
     <label title="Unload after this many idle minutes; empty or 0 = daemon default">
       Idle unload
       <input type="number" min="0" step="5" bind:value={ttlMinutes} placeholder="default" />
@@ -138,6 +133,45 @@
       <input class="mono" bind:value={extraArgs} placeholder="e.g. --temp 0.6 --top-k 20" />
     </label>
   </div>
+
+  {#if hasExpert}
+    <details class="expert" open={initial.speculative?.ngram || initial.speculative?.mtp || initial.gpu_api !== null}>
+      <summary><span class="badge">Expert</span> Performance</summary>
+      <p class="sub">
+        Each setting trades something for speed; measured on this laptop in <code>docs/PERFORMANCE.md</code>.
+        Saving restarts the model.
+      </p>
+      {#if speculative}
+        {@render setting(PERF_SETTINGS.ngram, ngramControl)}
+        {@render setting(PERF_SETTINGS.mtp, mtpControl, model.has_mtp ? null : "This model file has no MTP layers.")}
+      {/if}
+      {#if device === "gpu"}
+        {@render setting(PERF_SETTINGS.gpu_api, gpuControl)}
+      {/if}
+    </details>
+  {/if}
+
+  {#snippet ngramControl()}<input type="checkbox" bind:checked={ngram} />{/snippet}
+  {#snippet mtpControl()}<input type="checkbox" bind:checked={mtp} disabled={!model.has_mtp && !mtp} />{/snippet}
+  {#snippet gpuControl()}
+    <select bind:value={gpuApi}>
+      <option value="default">Default{backends ? ` (${API_NAME[backends.settings.gpu_api]})` : ""}</option>
+      <option value="vulkan">Vulkan</option>
+      <option value="rocm" disabled={backends !== null && !hasBuild("rocm") && initial.gpu_api !== "rocm"}>
+        ROCm{backends && !hasBuild("rocm") ? " (not installed)" : ""}
+      </option>
+    </select>
+  {/snippet}
+  {#snippet setting(s: (typeof PERF_SETTINGS)[keyof typeof PERF_SETTINGS], control: import("svelte").Snippet, blocked: string | null = null)}
+    <div class="perf">
+      <label class="perf-head">{@render control()} <b>{s.title}</b></label>
+      <p class="sub">{s.what}{blocked ? ` ${blocked}` : ""}</p>
+      <ul>
+        {#each s.upsides as u (u)}<li><span class="mark" aria-label="upside">+</span>{u}</li>{/each}
+        {#each s.downsides as d (d)}<li><span class="mark" aria-label="downside">−</span>{d}</li>{/each}
+      </ul>
+    </div>
+  {/snippet}
 
   <div class="row aliases">
     <span class="label">Aliases</span>
@@ -239,5 +273,53 @@
   }
   p {
     margin: 0;
+  }
+  .expert {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.8rem;
+  }
+  .expert summary {
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .expert > p {
+    margin: 0.4rem 0 0.2rem;
+  }
+  .badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid var(--warn, var(--border));
+    color: var(--warn, var(--muted));
+    border-radius: 4px;
+    padding: 0 0.3rem;
+    margin-right: 0.3rem;
+  }
+  .perf {
+    padding: 0.5rem 0;
+    border-top: 1px solid var(--border);
+    margin-top: 0.4rem;
+  }
+  .perf-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .perf p {
+    margin: 0.2rem 0;
+  }
+  .perf ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.85rem;
+  }
+  .mark {
+    display: inline-block;
+    width: 1.1rem;
+    font-weight: 700;
+    color: var(--muted);
   }
 </style>

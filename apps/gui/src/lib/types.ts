@@ -102,9 +102,18 @@ export type ModelStatus = {
   pinned: boolean;
   idle_ttl_secs: number | null;
   extra_args: string[];
+  speculative: Speculative;
+  /** The model file has MTP layers (GGUF). */
+  has_mtp: boolean;
   estimated_bytes: number | null;
   in_flight: number;
 } & ModelState;
+
+/** Speculative decoding methods (docs/PERFORMANCE.md §1). */
+export interface Speculative {
+  ngram: boolean;
+  mtp: boolean;
+}
 
 // Mirrors crates/contiod/src/aliases.rs.
 export interface Alias {
@@ -123,6 +132,7 @@ export interface ModelPatch {
   device?: "gpu" | "cpu";
   extra_args?: string[];
   gpu_api?: GpuApi | "default";
+  speculative?: Speculative;
 }
 
 // Mirrors crates/contiod/src/catalog_api.rs.

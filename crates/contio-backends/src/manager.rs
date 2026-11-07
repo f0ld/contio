@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use contio_core::hw::{GpuApi, MemoryPoolKind};
-use contio_core::model::{ModelProfile, ModelState, ModelStatus};
+use contio_core::model::{ModelProfile, ModelSource, ModelState, ModelStatus};
 
 use crate::instance::{Instance, free_port};
 use crate::{Backend, BackendError};
@@ -384,6 +384,8 @@ impl ModelManager {
                     pinned: p.pinned,
                     idle_ttl_secs: p.idle_ttl_secs,
                     extra_args: p.extra_args.clone(),
+                    speculative: p.speculative,
+                    has_mtp: matches!(&p.source, ModelSource::Gguf { path, .. } if crate::gguf::has_mtp(path)),
                     estimated_bytes: slot
                         .and_then(|s| s.estimate)
                         .or_else(|| backend.and_then(|b| b.estimate_bytes(p))),

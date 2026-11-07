@@ -16,7 +16,7 @@ use contio_catalog::hf::{HfClient, LISTING_TTL, RepoInfo, valid_repo};
 use contio_catalog::quant::{Quant, RepoFile, RepoListing, bits_per_weight, quality_tier};
 use contio_catalog::{Catalog, CatalogModel, Family};
 use contio_core::hw::{DeviceKind, GpuApi, MemoryPoolKind};
-use contio_core::model::{KvGeometry, ModelKind, ModelOrigin, ModelProfile, ModelSource};
+use contio_core::model::{KvGeometry, ModelKind, ModelOrigin, ModelProfile, ModelSource, Speculative};
 use contio_install::download::{self, Remote};
 use contio_install::jobs::JobCtx;
 use contio_install::{BackendKind, FLM_DEFAULT_VERSION, LLAMACPP_DEFAULT_VERSION, Method, WHISPER_DEFAULT_VERSION};
@@ -975,6 +975,9 @@ pub struct ModelPatch {
     /// GGUF models: `vulkan`, `rocm`, or `default` (follow the daemon setting).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_api: Option<GpuChoice>,
+    /// GGUF chat models: speculative decoding methods (all fields replaced).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speculative: Option<Speculative>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1026,6 +1029,12 @@ impl ModelPatch {
             }
             p.gpu_api = g.api();
         }
+        if let Some(s) = self.speculative {
+            if !matches!(p.source, ModelSource::Gguf { .. }) || p.kind != ModelKind::Chat {
+                return Err("speculative decoding is for GGUF chat models".into());
+            }
+            p.speculative = s;
+        }
         Ok(())
     }
 
@@ -1037,6 +1046,7 @@ impl ModelPatch {
         self.device = newer.device.or(self.device);
         self.extra_args = newer.extra_args.clone().or(self.extra_args.take());
         self.gpu_api = newer.gpu_api.or(self.gpu_api);
+        self.speculative = newer.speculative.or(self.speculative);
     }
 }
 
@@ -1056,6 +1066,11 @@ pub async fn update_model(
         && !state.manager.has_gpu_build(api)
     {
         return bad_request(&format!("install the llama.cpp {api} build first (Backends)"));
+    }
+    if patch.speculative.is_some_and(|s| s.mtp)
+        && !matches!(&p.source, ModelSource::Gguf { path, .. } if contio_backends::has_mtp(path))
+    {
+        return bad_request("this model file has no MTP layers; install a variant that keeps them (often named `…-MTP-GGUF`)");
     }
     if let Err(e) = state.manager.update_profile(p).await {
         return crate::gateway::backend_error(&e);
