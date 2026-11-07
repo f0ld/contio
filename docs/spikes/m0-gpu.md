@@ -1,6 +1,6 @@
 # M0 Spike: GPU (Vulkan) & CPU via llama.cpp, plus a cross-device comparison
 
-> Status: **Done for power saver and balanced.** ROCm and `performance` are open (§7).
+> Status: **Done.** Power saver and balanced (§2–4); ROCm vs Vulkan and `performance` added 2026-11-07 (§8).
 > Date: 2026-11-03 · Run `gpu-20261103-114636` · llama.cpp `b12068` (4402e65) · Mesa 26.2.5 (RADV)
 > Same machine, models, and probe as [m0-npu.md](m0-npu.md).
 
@@ -10,7 +10,7 @@
 |---|---|
 | Build | `scripts/spikes/gpu-llamacpp.sh`, Vulkan backend, `GGML_NATIVE=ON`, no sudo, **164 s** |
 | Build deps | `vulkan-headers`, `vulkan-loader-devel`, `glslc`, **`spirv-headers-devel`** (was missing → first build failed) |
-| ROCm | skipped (`rocm-hip-devel` etc. not installed) |
+| ROCm | see §8 (ROCm 7.1.1, Fedora packages) |
 | GPU memory | 64 GiB VRAM carve-out + 31 GiB GTT |
 | Models | Q4_K_M GGUF (bartowski/unsloth), sha256-verified against HF |
 | GPU flags | `-ngl 999 -fa on -c 16384 --jinja` |
@@ -127,9 +127,40 @@ Prefill values are llama-bench pp4096 for GPU/CPU and the API probe for the NPU.
 
 ## 7. Open follow-ups
 - [x] Re-run all three devices in `balanced` (§4).
-- [ ] `performance` profile on AC: is there headroom above 25 W?
+- [x] `performance` profile on AC: is there headroom above 25 W? (§8: +6% prefill over balanced, decode unchanged)
 - [ ] NPU concurrency check: verify response bodies, and test two LLM processes under parallel load.
-- [ ] ROCm/HIP build for gfx1150 vs Vulkan (`sudo dnf install rocm-hip-devel hipblas-devel rocblas-devel`).
+- [x] ROCm/HIP build for gfx1150 vs Vulkan (§8: no clear win, Vulkan stays the only GPU backend).
 - [ ] Parallel load: GPU model + NPU model serving simultaneously. How much does each slow the other (shared bandwidth)?
 - [ ] KV-cache quantization (`-ctk q8_0 -ctv q8_0`) and longer contexts (16k–32k) for agentic workloads.
 - [ ] Larger models that only the GPU can hold: e.g. gpt-oss-120b (~63 GB), checking the 64 GB VRAM limit.
+
+## 8. ROCm/HIP vs Vulkan (2026-11-07)
+
+Same llama.cpp commit (4402e65) built twice: `build-vulkan` and `build-rocm`
+(`-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1150 -DGGML_NATIVE=ON`, 3.5 min). ROCm 7.1.1 from the Fedora 44
+packages (`rocm-hip-devel hipblas-devel rocblas-devel rocwmma-devel`); rocBLAS ships gfx1150 kernels and the
+890M shows up as `ROCm0` with the 64 GiB carve-out (Vulkan also counts GTT: 97 GiB). The
+`GGML_HIP_ROCWMMA_FATTN` option no longer exists in this llama.cpp; HIP uses its own flash-attention kernels.
+
+`llama-bench -ngl 99 -fa 0,1 -p 512,4096,16384 -n 128 -r 3`, AC power, **performance** profile, backends run
+one after the other with nothing else on the GPU. Flash attention on (the contio default); tok/s, ROCm relative to Vulkan:
+
+| Model | pp512 Vulkan / ROCm | pp4096 Vulkan / ROCm | pp16384 Vulkan / ROCm | tg128 Vulkan / ROCm |
+|---|---|---|---|---|
+| Qwen3 4B Instruct Q4_K_M | 773 / 763 (−1%) | 644 / 661 (+3%) | 396 / 420 (+6%) | **29.5** / 27.1 (−8%) |
+| Qwen3.5 4B UD-Q4_K_XL | 663 / 698 (+5%) | 646 / 660 (+2%) | **556** / 516 (−7%) | **23.0** / 22.0 (−5%) |
+| Qwen3 8B Q4_K_M | 431 / 447 (+4%) | 390 / 410 (+5%) | 283 / 300 (+6%) | **16.3** / 15.5 (−5%) |
+| Qwen3.6 35B-A3B UD-Q4_K_M | 562 / 578 (+3%) | 540 / 563 (+4%) | 462 / **504 (+9%)** | **23.5** / 21.6 (−8%) |
+
+Without flash attention the two are within ±5% on prefill (ROCm +10% only for Qwen3.5 4B at 512); decode is the same picture.
+Standard deviations are ≤ 1% except a few pp512 runs.
+
+Findings:
+
+1. **No clear winner.** ROCm prefills 3–9% faster on long prompts (not for the hybrid Qwen3.5), Vulkan decodes 5–8% faster
+   everywhere. For agentic coding with the 35B at 16k context, ROCm saves ~3 s of a ~35 s prefill and costs ~1.9 tok/s of decode.
+2. **Not worth a second backend.** A ROCm backend would add ~1.5 GB of system packages, a slower build and a per-model choice
+   for single-digit gains in either direction. Vulkan stays the only GPU backend; worth re-checking with new ROCm or llama.cpp releases.
+3. **Flash attention matters more than the backend:** at 16k it doubles prefill for dense models (Qwen3 4B 200 → 396 tok/s) on both backends; for the MoE it is +3–11%.
+4. **`performance` profile:** 35B pp4096 is 540 tok/s vs 509 in balanced and 359 in power saver (§4), decode unchanged (23.5 vs 23.6).
+   Most of the gain is power saver → balanced; performance adds ~6% on top.

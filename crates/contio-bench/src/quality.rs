@@ -31,6 +31,8 @@ fn max_tokens(preset: crate::Preset) -> u32 {
 /// Python for the coding sandbox (small; pulled once).
 pub const SANDBOX_IMAGE: &str = "docker.io/library/python:3.12-alpine";
 const RUN_TIMEOUT_SECS: u32 = 10;
+/// Label on every sandbox container, so leftovers can be found and removed.
+const SANDBOX_LABEL: &str = "contio-sandbox";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -196,8 +198,10 @@ fn program(prompt: &str, code: &str, test: &str, entry_point: &str) -> String {
     format!("{}\n\n{body}\n\n{test}\n\ncheck({entry_point})\n", imports.join("\n"))
 }
 
-/// What a coding run needs; checked before a coding run starts.
+/// What a coding run needs; checked before a coding run starts. Also removes
+/// sandbox containers left over from an earlier run.
 pub async fn sandbox_ready() -> Result<(), String> {
+    remove_sandboxes(&format!("label={SANDBOX_LABEL}")).await;
     let ok = Command::new("podman")
         .args(["image", "exists", SANDBOX_IMAGE])
         .status()
@@ -223,10 +227,21 @@ pub async fn run_sandboxed(source: &str, work: &Path) -> Result<(), String> {
     let dir = tempdir_in(work)?;
     std::fs::write(dir.join("main.py"), source).map_err(|e| e.to_string())?;
     let mount = format!("{}:/work:ro,Z", dir.display());
+    let name = format!("contio-{}", dir.file_name().and_then(|n| n.to_str()).unwrap_or("sandbox"));
+    let label = format!("--label={SANDBOX_LABEL}");
+    // `timeout` alone can't stop the code: it execs python as PID 1, and PID 1
+    // ignores signals it has no handler for. `--init` puts a real init in front;
+    // podman's own `--timeout` is the backstop.
+    let podman_timeout = format!("--timeout={}", RUN_TIMEOUT_SECS + 5);
     let mut cmd = Command::new("podman");
     cmd.args([
         "run",
         "--rm",
+        "--init",
+        &podman_timeout,
+        "--name",
+        &name,
+        &label,
         "--network=none",
         "--read-only",
         "--cap-drop=all",
@@ -247,6 +262,10 @@ pub async fn run_sandboxed(source: &str, work: &Path) -> Result<(), String> {
     .stdin(Stdio::null())
     .kill_on_drop(true);
     let out = tokio::time::timeout(Duration::from_secs(u64::from(RUN_TIMEOUT_SECS) + 30), cmd.output()).await;
+    if out.is_err() {
+        // killing the podman client leaves the container running
+        remove_sandboxes(&format!("name=^{name}$")).await;
+    }
     let _ = std::fs::remove_dir_all(&dir);
     let out = out.map_err(|_| "sandbox timed out".to_owned())?.map_err(|e| format!("podman: {e}"))?;
     if out.status.success() {
@@ -258,6 +277,16 @@ pub async fn run_sandboxed(source: &str, work: &Path) -> Result<(), String> {
         Some(124 | 143) => format!("timed out after {RUN_TIMEOUT_SECS} s"),
         _ => format!("tests failed: {}", last.chars().take(160).collect::<String>()),
     })
+}
+
+/// Force-remove sandbox containers matching a podman filter. Best effort.
+async fn remove_sandboxes(filter: &str) {
+    let _ = Command::new("podman")
+        .args(["rm", "-f", "-i", "--filter", filter])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
 }
 
 fn tempdir_in(base: &Path) -> Result<std::path::PathBuf, String> {
@@ -496,6 +525,6 @@ mod tests {
         let write = "open('/etc/x', 'w').write('x')\n";
         assert!(run_sandboxed(write, dir.path()).await.is_err(), "read-only root");
         let e = run_sandboxed("while True: pass\n", dir.path()).await.unwrap_err();
-        assert!(e.contains("timed out"), "{e}");
+        assert_eq!(e, "timed out after 10 s", "stopped inside the container, not by the host fallback");
     }
 }

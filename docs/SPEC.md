@@ -144,7 +144,7 @@ trait Backend {
 
 ### 5.2 CPU and GPU via llama.cpp (primary engine, v1)
 - **CPU**: llama.cpp built with AVX-512 / Zen 5 flags. Options: thread count and core affinity (prefer the Zen 5 cores), mlock, mmap.
-- **GPU**: llama.cpp **Vulkan (RADV)** as the default (verified in M0: builds in ~3 min, fastest device on every model tested). **ROCm/HIP** is an optional second GPU backend that is benchmarked against Vulkan.
+- **GPU**: llama.cpp **Vulkan (RADV)** as the default (verified in M0: builds in ~3 min, fastest device on every model tested). **ROCm/HIP** was benchmarked against Vulkan on gfx1150 (`docs/spikes/m0-gpu.md` §8): 3–9% faster prefill, 5–8% slower decode, so no second GPU backend for now.
 - **Default device policy (from M0, [`docs/spikes/m0-gpu.md`](spikes/m0-gpu.md))**: GPU for chat/agentic models (MoE models like Qwen3.6 35B-A3B are the sweet spot). NPU for embeddings, Whisper, and small helper models, so the GPU stays free. CPU for overflow and small models. Speed estimates use measured numbers keyed by power profile. The **power profile is a speed/energy dial**: in M0, balanced (~25 W cap) gave +40% prefill vs power saver (~15 W cap) at +57% J/token on the GPU. contio exposes this as a user choice ("quiet / efficient" vs "fast") instead of hiding it.
 - **Build preflight (Vulkan)**: `cmake`, `ninja-build`, `gcc-c++`, `vulkan-headers`, `vulkan-loader-devel`, `glslc`, `spirv-headers-devel`. Missing packages are shown as one `dnf install` line before the build starts.
 - **Unified memory**: the iGPU uses the BIOS VRAM carve-out (currently 64 GB) plus GTT, which is borrowed from system RAM. contio detects the current limits and, if needed, **shows** the user how to raise them (e.g. `amdgpu`/`ttm` kernel params). It does **not** silently change system config.
@@ -336,7 +336,7 @@ contio serve                            # run daemon in foreground
 
 ## 13. Status & Next Steps
 
-**M0: done.** Spikes in `docs/spikes/` (NPU, GPU/CPU, GUI). ROCm and the `performance` profile are still open.
+**M0: done.** Spikes in `docs/spikes/` (NPU, GPU/CPU, GUI). ROCm vs Vulkan and the `performance` profile were measured later (m0-gpu §8): Vulkan stays.
 
 **M1: done** (merged to `main`):
 - [x] Cargo workspace (§3): `contio-core`, `contio-hw`, `contio-backends`, `contiod`, `apps/gui`
