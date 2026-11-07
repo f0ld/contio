@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::hw::{DeviceKind, MemoryPoolKind};
+use crate::hw::{DeviceKind, GpuApi, MemoryPoolKind};
 
 /// Where a model's weights come from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +112,9 @@ pub struct ModelProfile {
     #[serde(flatten)]
     pub source: ModelSource,
     pub device: DeviceKind,
+    /// GGUF on the GPU: Vulkan or ROCm build of llama.cpp; the daemon default if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_api: Option<GpuApi>,
     #[serde(default)]
     pub kind: ModelKind,
     /// Context length in tokens; backend default if unset.
@@ -140,6 +143,7 @@ impl ModelProfile {
             id: id.into(),
             source,
             device,
+            gpu_api: None,
             kind: ModelKind::Chat,
             context: None,
             pinned: false,
@@ -148,6 +152,11 @@ impl ModelProfile {
             kv: None,
             origin: None,
         }
+    }
+
+    /// Whether the GPU API matters: GGUF (llama.cpp) on the GPU.
+    pub fn uses_gpu_api(&self) -> bool {
+        self.device == DeviceKind::Gpu && matches!(self.source, ModelSource::Gguf { .. })
     }
 
     /// The memory pool this model's weights live in.
@@ -173,6 +182,12 @@ pub enum ModelState {
 pub struct ModelStatus {
     pub id: String,
     pub device: DeviceKind,
+    /// The profile's GPU API choice (`None`: the daemon default).
+    #[serde(default)]
+    pub gpu_api: Option<GpuApi>,
+    /// The GPU API it runs with: the choice or the default (GGUF on the GPU only).
+    #[serde(default)]
+    pub gpu_api_used: Option<GpuApi>,
     pub kind: ModelKind,
     pub context: Option<u32>,
     /// Registered through the API (removable), as opposed to `config.toml`.
@@ -213,6 +228,13 @@ mod tests {
         assert_eq!(p.kind, ModelKind::Chat);
         assert_eq!(p.pool(), MemoryPoolKind::Gpu);
         assert!(!p.pinned && p.extra_args.is_empty());
+        assert_eq!(p.gpu_api, None, "daemon default");
+        assert!(p.uses_gpu_api());
+        let rocm: ModelProfile = serde_json::from_value(serde_json::json!({
+            "id": "q", "format": "gguf", "path": "/m/q.gguf", "device": "gpu", "gpu_api": "rocm"
+        }))
+        .unwrap();
+        assert_eq!(rocm.gpu_api, Some(GpuApi::Rocm));
 
         let npu: ModelProfile = serde_json::from_value(serde_json::json!({
             "id": "qwen3-4b-npu", "format": "flm", "tag": "qwen3-it:4b", "device": "npu"
@@ -226,6 +248,8 @@ mod tests {
         let s = ModelStatus {
             id: "m".into(),
             device: DeviceKind::Gpu,
+            gpu_api: None,
+            gpu_api_used: Some(GpuApi::Vulkan),
             kind: ModelKind::Chat,
             context: None,
             managed: false,

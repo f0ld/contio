@@ -5,6 +5,8 @@ use std::path::Path;
 
 use tokio::process::Command;
 
+use contio_core::hw::GpuApi;
+
 use crate::jobs::JobCtx;
 use crate::preflight::{self, FLM_SOURCE_PACKAGES, Preflight};
 use crate::{BackendKind, InstalledBackend, Method, git_checkout, install_dir, now, run_logged};
@@ -35,7 +37,7 @@ pub async fn install_flm(data_dir: &Path, method: Method, version: &str, ctx: &J
     }
 
     let short = &version[..version.len().min(12)];
-    let dir = install_dir(data_dir, BackendKind::Flm, short, method);
+    let dir = install_dir(data_dir, BackendKind::Flm, short, method, GpuApi::default());
     let src = dir.join("src");
     let prefix = dir.join("prefix");
     git_checkout(ctx, REPO, version, &src).await?;
@@ -68,6 +70,7 @@ pub async fn install_flm(data_dir: &Path, method: Method, version: &str, ctx: &J
         dir,
         bin_dir: None,
         image: None,
+        gpu_api: GpuApi::default(),
         prefix: Some(prefix),
         installed_at: now(),
     };

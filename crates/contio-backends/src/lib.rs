@@ -14,6 +14,7 @@ mod whisper;
 
 use std::path::PathBuf;
 
+use contio_core::hw::GpuApi;
 use contio_core::model::ModelProfile;
 use tokio::process::Command;
 
@@ -33,7 +34,13 @@ pub trait Backend: Send + Sync {
         self.name().to_owned()
     }
 
-    /// Whether this backend can run the profile (format + device).
+    /// The GPU API this backend is built for, if it matters (llama.cpp).
+    fn gpu_api(&self) -> Option<GpuApi> {
+        None
+    }
+
+    /// Whether this backend can run the profile (format + device). The
+    /// manager fills in the default GPU API before asking.
     fn supports(&self, profile: &ModelProfile) -> bool;
 
     /// The command that starts a server for `profile` on `127.0.0.1:port`.
@@ -63,6 +70,8 @@ pub enum BackendError {
     NotManaged(String),
     #[error("no backend can run model `{0}` on this device")]
     Unsupported(String),
+    #[error("`{model}` runs on {api}, but no llama.cpp {api} build is installed (install one under Backends, or pick another GPU backend)")]
+    MissingGpuBuild { model: String, api: GpuApi },
     #[error("backend binary not found: {0}")]
     MissingBinary(PathBuf),
     #[error("model file not found: {0}")]

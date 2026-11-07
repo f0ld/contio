@@ -19,6 +19,10 @@ pub const LLAMACPP_SOURCE_PACKAGES: &[&str] = &[
     "spirv-headers-devel",
 ];
 
+/// llama.cpp ROCm/HIP build (verified on Fedora 44 with ROCm 7.1, m0-gpu.md §8).
+pub const LLAMACPP_ROCM_SOURCE_PACKAGES: &[&str] =
+    &["gcc-c++", "cmake", "ninja-build", "git", "rocm-hip-devel", "hipblas-devel", "rocblas-devel"];
+
 /// FastFlowLM source build (verified in M0).
 pub const FLM_SOURCE_PACKAGES: &[&str] =
     &["gcc-c++", "cmake", "ninja-build", "git", "boost-devel", "libcurl-devel", "libedit-devel"];

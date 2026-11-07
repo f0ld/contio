@@ -195,7 +195,10 @@ pub fn backend_error(e: &BackendError) -> Response {
         BackendError::NotManaged(_) => (StatusCode::CONFLICT, "model_in_config", None),
         BackendError::InsufficientMemory { .. } => (StatusCode::SERVICE_UNAVAILABLE, "insufficient_memory", None),
         BackendError::StartFailed { .. } => (StatusCode::SERVICE_UNAVAILABLE, "backend_start_failed", None),
-        BackendError::Unsupported(_) | BackendError::MissingBinary(_) | BackendError::MissingModelFile(_) => {
+        BackendError::Unsupported(_)
+        | BackendError::MissingGpuBuild { .. }
+        | BackendError::MissingBinary(_)
+        | BackendError::MissingModelFile(_) => {
             (StatusCode::SERVICE_UNAVAILABLE, "backend_unavailable", None)
         }
         BackendError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", None),

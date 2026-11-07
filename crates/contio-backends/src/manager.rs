@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use contio_core::hw::MemoryPoolKind;
+use contio_core::hw::{GpuApi, MemoryPoolKind};
 use contio_core::model::{ModelProfile, ModelState, ModelStatus};
 
 use crate::instance::{Instance, free_port};
@@ -40,6 +40,8 @@ struct Inner {
     ops: tokio::sync::Mutex<()>,
     http: reqwest::Client,
     epoch: Instant,
+    /// GPU API for GGUF models on the GPU that don't pick one.
+    default_gpu_api: RwLock<GpuApi>,
 }
 
 struct Registered {
@@ -101,6 +103,7 @@ impl ModelManager {
                 ops: tokio::sync::Mutex::new(()),
                 http: reqwest::Client::new(),
                 epoch: Instant::now(),
+                default_gpu_api: RwLock::default(),
             }),
         }
     }
@@ -174,6 +177,31 @@ impl ModelManager {
     pub fn add_backend(&self, backend: Arc<dyn Backend>) {
         tracing::info!(backend = %backend.describe(), "backend registered");
         self.inner.backends.write().expect("backends lock poisoned").insert(0, backend);
+    }
+
+    pub fn default_gpu_api(&self) -> GpuApi {
+        *self.inner.default_gpu_api.read().expect("gpu api lock poisoned")
+    }
+
+    /// Change the default GPU API. Loaded models that follow the default and
+    /// now run elsewhere are stopped; the next request starts them on the new one.
+    pub async fn set_default_gpu_api(&self, api: GpuApi) {
+        let _ops = self.inner.ops.lock().await;
+        let old = std::mem::replace(&mut *self.inner.default_gpu_api.write().expect("gpu api lock poisoned"), api);
+        if old == api {
+            return;
+        }
+        tracing::info!(%api, "default GPU API changed");
+        let affected: Vec<String> =
+            self.profiles().into_iter().filter(|p| p.uses_gpu_api() && p.gpu_api.is_none()).map(|p| p.id).collect();
+        for id in affected {
+            self.stop_slot(&id).await;
+        }
+    }
+
+    /// Whether a llama.cpp build for `api` is registered.
+    pub fn has_gpu_build(&self, api: GpuApi) -> bool {
+        self.inner.backends.read().expect("backends lock poisoned").iter().any(|b| b.gpu_api() == Some(api))
     }
 
     /// Whether a backend with this [`Backend::name`] is registered.
@@ -343,6 +371,8 @@ impl ModelManager {
                 ModelStatus {
                     id: p.id.clone(),
                     device: p.device,
+                    gpu_api: p.gpu_api,
+                    gpu_api_used: p.uses_gpu_api().then(|| p.gpu_api.unwrap_or(self.default_gpu_api())),
                     kind: p.kind,
                     context: p.context,
                     managed: r.managed,
@@ -380,14 +410,22 @@ impl ModelManager {
     }
 
     fn backend_for(&self, profile: &ModelProfile) -> Result<Arc<dyn Backend>, BackendError> {
-        self.inner
-            .backends
-            .read()
-            .expect("backends lock poisoned")
-            .iter()
-            .find(|b| b.supports(profile))
-            .cloned()
-            .ok_or_else(|| BackendError::Unsupported(profile.id.clone()))
+        // backends see the default GPU API filled in
+        let profile: std::borrow::Cow<'_, ModelProfile> = if profile.uses_gpu_api() && profile.gpu_api.is_none() {
+            let mut p = profile.clone();
+            p.gpu_api = Some(self.default_gpu_api());
+            std::borrow::Cow::Owned(p)
+        } else {
+            std::borrow::Cow::Borrowed(profile)
+        };
+        let found =
+            self.inner.backends.read().expect("backends lock poisoned").iter().find(|b| b.supports(&profile)).cloned();
+        found.ok_or_else(|| match profile.gpu_api {
+            Some(api) if profile.uses_gpu_api() && self.has_backend("llama.cpp") => {
+                BackendError::MissingGpuBuild { model: profile.id.clone(), api }
+            }
+            _ => BackendError::Unsupported(profile.id.clone()),
+        })
     }
 
     fn lock_slots(&self) -> std::sync::MutexGuard<'_, HashMap<String, Slot>> {

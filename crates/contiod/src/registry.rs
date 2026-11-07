@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::collections::BTreeMap;
 
 use contio_backends::{BackendError, ModelManager};
+use contio_core::hw::GpuApi;
 use contio_core::model::ModelProfile;
 use contio_install::Method;
 use serde::{Deserialize, Serialize};
@@ -21,12 +22,19 @@ pub struct Settings {
     pub llamacpp_method: Method,
     pub flm_method: Method,
     pub whisper_method: Method,
+    /// GPU API for GGUF models on the GPU that don't pick one (m0-gpu.md §8: Vulkan is faster overall).
+    pub gpu_api: GpuApi,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         // prebuilt: no build dependencies, ~30 MB, verified in M1
-        Self { llamacpp_method: Method::Prebuilt, flm_method: Method::Source, whisper_method: Method::Source }
+        Self {
+            llamacpp_method: Method::Prebuilt,
+            flm_method: Method::Source,
+            whisper_method: Method::Source,
+            gpu_api: GpuApi::Vulkan,
+        }
     }
 }
 

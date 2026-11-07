@@ -159,8 +159,8 @@ Findings:
 
 1. **No clear winner.** ROCm prefills 3–9% faster on long prompts (not for the hybrid Qwen3.5), Vulkan decodes 5–8% faster
    everywhere. For agentic coding with the 35B at 16k context, ROCm saves ~3 s of a ~35 s prefill and costs ~1.9 tok/s of decode.
-2. **Not worth a second backend.** A ROCm backend would add ~1.5 GB of system packages, a slower build and a per-model choice
-   for single-digit gains in either direction. Vulkan stays the only GPU backend; worth re-checking with new ROCm or llama.cpp releases.
+2. **Vulkan stays the default.** ROCm costs ~1.5 GB of system packages (or a ~23 GB container image) for single-digit gains in
+   either direction. contio offers it as an optional second build, chosen per model (e.g. long-context, prompt-heavy work).
 3. **Flash attention matters more than the backend:** at 16k it doubles prefill for dense models (Qwen3 4B 200 → 396 tok/s) on both backends; for the MoE it is +3–11%.
 4. **`performance` profile:** 35B pp4096 is 540 tok/s vs 509 in balanced and 359 in power saver (§4), decode unchanged (23.5 vs 23.6).
    Most of the gain is power saver → balanced; performance adds ~6% on top.

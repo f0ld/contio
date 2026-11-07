@@ -15,11 +15,11 @@ use contio_catalog::flm::{FlmModel, PLATFORM_XDNA2, parse_model_list};
 use contio_catalog::hf::{HfClient, LISTING_TTL, RepoInfo, valid_repo};
 use contio_catalog::quant::{Quant, RepoFile, RepoListing, bits_per_weight, quality_tier};
 use contio_catalog::{Catalog, CatalogModel, Family};
-use contio_core::hw::{DeviceKind, MemoryPoolKind};
+use contio_core::hw::{DeviceKind, GpuApi, MemoryPoolKind};
 use contio_core::model::{KvGeometry, ModelKind, ModelOrigin, ModelProfile, ModelSource};
 use contio_install::download::{self, Remote};
 use contio_install::jobs::JobCtx;
-use contio_install::{BackendKind, FLM_DEFAULT_VERSION, LLAMACPP_DEFAULT_VERSION, WHISPER_DEFAULT_VERSION};
+use contio_install::{BackendKind, FLM_DEFAULT_VERSION, LLAMACPP_DEFAULT_VERSION, Method, WHISPER_DEFAULT_VERSION};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -712,12 +712,20 @@ async fn ensure_backend(state: &AppState, kind: BackendKind, ctx: &JobCtx) -> Re
         BackendKind::Flm => ("FastFlowLM", state.registry.settings().flm_method, FLM_DEFAULT_VERSION),
         BackendKind::Whisper => ("whisper.cpp", state.registry.settings().whisper_method, WHISPER_DEFAULT_VERSION),
     };
-    if state.manager.has_backend(name) {
+    // llama.cpp: a build for the default GPU API (CPU models run on any build)
+    let gpu_api = state.manager.default_gpu_api();
+    let present = match kind {
+        BackendKind::LlamaCpp => state.manager.has_gpu_build(gpu_api),
+        _ => state.manager.has_backend(name),
+    };
+    if present {
         return Ok(());
     }
+    // no prebuilt ROCm build runs on Fedora's ROCm
+    let method = if gpu_api == GpuApi::Rocm && method == Method::Prebuilt { Method::Source } else { method };
     ctx.log(&format!("{name} isn't set up yet; installing it ({method:?})"));
     let sub = ctx.with_prefix(&format!("[{}] ", kind.dir_name()));
-    install_and_register(&state.installer, &state.manager, kind, method, version, &sub).await?;
+    install_and_register(&state.installer, &state.manager, kind, method, version, gpu_api, &sub).await?;
     Ok(())
 }
 
@@ -964,6 +972,27 @@ pub struct ModelPatch {
     pub device: Option<DeviceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_args: Option<Vec<String>>,
+    /// GGUF models: `vulkan`, `rocm`, or `default` (follow the daemon setting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_api: Option<GpuChoice>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GpuChoice {
+    Default,
+    Vulkan,
+    Rocm,
+}
+
+impl GpuChoice {
+    pub fn api(self) -> Option<GpuApi> {
+        match self {
+            Self::Default => None,
+            Self::Vulkan => Some(GpuApi::Vulkan),
+            Self::Rocm => Some(GpuApi::Rocm),
+        }
+    }
 }
 
 impl ModelPatch {
@@ -991,6 +1020,12 @@ impl ModelPatch {
         if let Some(a) = &self.extra_args {
             p.extra_args = a.clone();
         }
+        if let Some(g) = self.gpu_api {
+            if !matches!(p.source, ModelSource::Gguf { .. }) {
+                return Err("only GGUF models (llama.cpp) have a GPU backend choice".into());
+            }
+            p.gpu_api = g.api();
+        }
         Ok(())
     }
 
@@ -1001,6 +1036,7 @@ impl ModelPatch {
         self.idle_ttl_secs = newer.idle_ttl_secs.or(self.idle_ttl_secs);
         self.device = newer.device.or(self.device);
         self.extra_args = newer.extra_args.clone().or(self.extra_args.take());
+        self.gpu_api = newer.gpu_api.or(self.gpu_api);
     }
 }
 
@@ -1015,6 +1051,11 @@ pub async fn update_model(
     };
     if let Err(e) = patch.apply(&mut p) {
         return bad_request(&e);
+    }
+    if let Some(api) = patch.gpu_api.and_then(GpuChoice::api)
+        && !state.manager.has_gpu_build(api)
+    {
+        return bad_request(&format!("install the llama.cpp {api} build first (Backends)"));
     }
     if let Err(e) = state.manager.update_profile(p).await {
         return crate::gateway::backend_error(&e);

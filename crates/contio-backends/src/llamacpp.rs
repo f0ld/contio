@@ -1,9 +1,9 @@
-//! llama.cpp `llama-server` (GGUF on GPU via Vulkan, or CPU), run natively or
-//! in a Podman container.
+//! llama.cpp `llama-server` (GGUF on GPU via Vulkan or ROCm, or CPU), run
+//! natively or in a Podman container.
 
 use std::path::{Path, PathBuf};
 
-use contio_core::hw::DeviceKind;
+use contio_core::hw::{DeviceKind, GpuApi};
 use contio_core::model::{ModelKind, ModelProfile, ModelSource, estimate_memory};
 use tokio::process::Command;
 
@@ -11,7 +11,7 @@ use crate::{Backend, BackendError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlamaRuntime {
-    /// Directory containing `llama-server` (a Vulkan build also serves CPU).
+    /// Directory containing `llama-server` (a GPU build also serves CPU).
     Native { bin_dir: PathBuf },
     /// A llama.cpp server image (entrypoint `llama-server`), run with `podman run`.
     Podman { image: String },
@@ -20,6 +20,8 @@ pub enum LlamaRuntime {
 #[derive(Debug, Clone)]
 pub struct LlamaCppConfig {
     pub runtime: LlamaRuntime,
+    /// What the build uses for GPU models.
+    pub gpu_api: GpuApi,
     /// Threads for CPU inference (physical cores work best, see m0-gpu.md).
     pub cpu_threads: Option<u32>,
 }
@@ -125,6 +127,9 @@ impl LlamaCppBackend {
         });
         if profile.device == DeviceKind::Gpu {
             a.extend(["--device".into(), "/dev/dri".into()]);
+            if self.config.gpu_api == GpuApi::Rocm {
+                a.extend(["--device".into(), "/dev/kfd".into()]);
+            }
         }
         a.push(image.to_owned());
         a.extend(self.args(profile, port, &format!("/models/{file}"), mmproj.as_deref(), "0.0.0.0"));
@@ -168,14 +173,25 @@ impl Backend for LlamaCppBackend {
     }
 
     fn describe(&self) -> String {
+        let api = self.config.gpu_api;
         match &self.config.runtime {
-            LlamaRuntime::Native { bin_dir } => format!("llama.cpp (native: {})", bin_dir.display()),
-            LlamaRuntime::Podman { image } => format!("llama.cpp (podman: {image})"),
+            LlamaRuntime::Native { bin_dir } => format!("llama.cpp {api} (native: {})", bin_dir.display()),
+            LlamaRuntime::Podman { image } => format!("llama.cpp {api} (podman: {image})"),
         }
     }
 
+    fn gpu_api(&self) -> Option<GpuApi> {
+        Some(self.config.gpu_api)
+    }
+
+    /// GPU models only on a build for their API (unset: Vulkan); any build runs CPU models.
     fn supports(&self, profile: &ModelProfile) -> bool {
-        Self::gguf_path(profile).is_some() && matches!(profile.device, DeviceKind::Gpu | DeviceKind::Cpu)
+        Self::gguf_path(profile).is_some()
+            && match profile.device {
+                DeviceKind::Gpu => profile.gpu_api.unwrap_or_default() == self.config.gpu_api,
+                DeviceKind::Cpu => true,
+                _ => false,
+            }
     }
 
     fn command(&self, profile: &ModelProfile, port: u16) -> Result<Command, BackendError> {
@@ -236,7 +252,16 @@ mod tests {
     fn backend() -> LlamaCppBackend {
         LlamaCppBackend::new(LlamaCppConfig {
             runtime: LlamaRuntime::Native { bin_dir: "/nonexistent".into() },
+            gpu_api: GpuApi::Vulkan,
             cpu_threads: Some(12),
+        })
+    }
+
+    fn rocm_backend() -> LlamaCppBackend {
+        LlamaCppBackend::new(LlamaCppConfig {
+            runtime: LlamaRuntime::Podman { image: "img".into() },
+            gpu_api: GpuApi::Rocm,
+            cpu_threads: None,
         })
     }
 
@@ -268,6 +293,21 @@ mod tests {
         let mut flm = profile(DeviceKind::Gpu);
         flm.source = ModelSource::Flm { tag: "x".into() };
         assert!(!b.supports(&flm));
+    }
+
+    #[test]
+    fn gpu_models_need_a_build_for_their_api() {
+        let (vulkan, rocm) = (backend(), rocm_backend());
+        let mut p = profile(DeviceKind::Gpu);
+        assert!(vulkan.supports(&p) && !rocm.supports(&p), "unset means Vulkan");
+        p.gpu_api = Some(GpuApi::Rocm);
+        assert!(!vulkan.supports(&p) && rocm.supports(&p));
+        let cpu = profile(DeviceKind::Cpu);
+        assert!(vulkan.supports(&cpu) && rocm.supports(&cpu), "either build runs CPU models");
+        assert!(rocm.describe().starts_with("llama.cpp ROCm (podman"));
+        let a = rocm.podman_args("img", &p, 1, Path::new("/m/q.gguf")).join(" ");
+        assert!(a.contains("--device /dev/dri --device /dev/kfd"), "{a}");
+        assert!(!backend().podman_args("img", &p, 1, Path::new("/m/q.gguf")).join(" ").contains("kfd"));
     }
 
     #[test]

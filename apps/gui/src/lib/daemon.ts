@@ -10,6 +10,7 @@ import type {
   BenchRun,
   CatalogOverview,
   DailyUsage,
+  GpuApi,
   HardwareInfo,
   InstallMethod,
   InstallModelRequest,
@@ -95,11 +96,11 @@ export const retryJob = (id: number) => send<{ job_id: number }>(`/api/jobs/${id
 
 export const fetchBackends = () => request<BackendsInfo>("/api/backends");
 
-export const checkPreflight = (backend: BackendId, method: InstallMethod) =>
-  request<PreflightResult>(`/api/backends/preflight?backend=${enc(backend)}&method=${method}`);
+export const checkPreflight = (backend: BackendId, method: InstallMethod, gpu_api: GpuApi = "vulkan") =>
+  request<PreflightResult>(`/api/backends/preflight?backend=${enc(backend)}&method=${method}&gpu_api=${gpu_api}`);
 
-export const installBackend = (backend: BackendId, method: InstallMethod) =>
-  send<{ job_id: number }>("/api/backends/install", "POST", { backend, method });
+export const installBackend = (backend: BackendId, method: InstallMethod, gpu_api: GpuApi = "vulkan") =>
+  send<{ job_id: number }>("/api/backends/install", "POST", { backend, method, gpu_api });
 
 export const saveSettings = (s: Settings) => send<Settings>("/api/settings", "PUT", s);
 

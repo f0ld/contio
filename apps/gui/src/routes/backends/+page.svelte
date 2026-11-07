@@ -2,26 +2,35 @@
   import { checkPreflight, errorText, fetchBackends, installBackend, saveSettings } from "$lib/daemon";
   import { jobs, refreshJobs } from "$lib/jobs.svelte";
   import { live } from "$lib/live.svelte";
-  import type { BackendId, BackendsInfo, InstallMethod, PreflightResult } from "$lib/types";
+  import type { BackendId, BackendsInfo, GpuApi, InstallMethod, PreflightResult } from "$lib/types";
+
+  /** One card: a backend, or the optional ROCm build of llama.cpp. */
+  type CardId = BackendId | "llama.cpp-rocm";
 
   let info = $state<BackendsInfo | null>(null);
   let error = $state<string | null>(null);
-  let checks = $state<Partial<Record<BackendId, PreflightResult>>>({});
-  let jobIds = $state<Partial<Record<BackendId, number>>>({});
+  let checks = $state<Partial<Record<CardId, PreflightResult>>>({});
+  let jobIds = $state<Partial<Record<CardId, number>>>({});
   let copied = $state<string | null>(null);
+  // the ROCm build has no saved method setting: it's only installed from here
+  let rocmMethod = $state<InstallMethod>("source");
 
   const BACKENDS: {
-    id: BackendId;
+    id: CardId;
+    backend: BackendId;
+    gpu?: GpuApi;
     name: string;
     what: string;
     registeredAs: string;
+    optional?: boolean;
     methods: { id: InstallMethod; name: string; note: string }[];
   }[] = [
     {
       id: "llama.cpp",
+      backend: "llama.cpp",
       name: "llama.cpp",
       what: "Runs GGUF models on the GPU (Vulkan) or CPU. Needed for almost every catalog model.",
-      registeredAs: "llama.cpp",
+      registeredAs: "llama.cpp Vulkan",
       methods: [
         { id: "prebuilt", name: "Prebuilt", note: "official release binary, ~35 MB, ready in seconds (recommended)" },
         { id: "source", name: "Build from source", note: "tuned for this CPU; needs compilers and Vulkan headers, ~2 min" },
@@ -29,7 +38,22 @@
       ],
     },
     {
+      id: "llama.cpp-rocm",
+      backend: "llama.cpp",
+      gpu: "rocm",
+      name: "llama.cpp for ROCm",
+      what:
+        "Optional second GPU build. On the Radeon 890M it reads long prompts 3–9% faster than Vulkan but writes answers 5–8% slower. Pick it per model, or as the default below.",
+      registeredAs: "llama.cpp ROCm",
+      optional: true,
+      methods: [
+        { id: "source", name: "Build from source", note: "needs the ROCm/HIP development packages, ~4 min" },
+        { id: "podman", name: "Podman container", note: "official ROCm image, ~23 GB download, nothing installed on the host" },
+      ],
+    },
+    {
       id: "flm",
+      backend: "flm",
       name: "FastFlowLM",
       what: "Runs models on the Ryzen AI NPU at a few watts, next to GPU models.",
       registeredAs: "FastFlowLM",
@@ -37,6 +61,7 @@
     },
     {
       id: "whisper.cpp",
+      backend: "whisper.cpp",
       name: "whisper.cpp",
       what: "Speech to text with Whisper models on the GPU (Vulkan) or CPU.",
       registeredAs: "whisper.cpp",
@@ -66,30 +91,46 @@
 
   const SETTING = { "llama.cpp": "llamacpp_method", flm: "flm_method", "whisper.cpp": "whisper_method" } as const;
 
-  const method = (b: BackendId): InstallMethod => info?.settings[SETTING[b]] ?? "source";
+  const card = (id: CardId) => BACKENDS.find((b) => b.id === id)!;
+  const method = (id: CardId): InstallMethod =>
+    id === "llama.cpp-rocm" ? rocmMethod : (info?.settings[SETTING[id]] ?? "source");
 
-  async function setMethod(b: BackendId, m: InstallMethod) {
+  async function setMethod(id: CardId, m: InstallMethod) {
+    delete checks[id];
+    if (id === "llama.cpp-rocm") {
+      rocmMethod = m;
+      return;
+    }
     if (!info) return;
-    const next = { ...info.settings, [SETTING[b]]: m };
+    const next = { ...info.settings, [SETTING[id]]: m };
     try {
       info.settings = await saveSettings(next);
-      delete checks[b];
     } catch (e) {
       error = errorText(e);
     }
   }
 
-  async function check(b: BackendId) {
+  async function setDefaultGpu(api: GpuApi) {
+    if (!info) return;
     try {
-      checks[b] = await checkPreflight(b, method(b));
+      info.settings = await saveSettings({ ...info.settings, gpu_api: api });
+      error = null;
     } catch (e) {
       error = errorText(e);
     }
   }
 
-  async function install(b: BackendId) {
+  async function check(id: CardId) {
     try {
-      jobIds[b] = (await installBackend(b, method(b))).job_id;
+      checks[id] = await checkPreflight(card(id).backend, method(id), card(id).gpu);
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
+  async function install(id: CardId) {
+    try {
+      jobIds[id] = (await installBackend(card(id).backend, method(id), card(id).gpu)).job_id;
       refreshJobs();
     } catch (e) {
       error = errorText(e);
@@ -120,6 +161,8 @@
       <h2>{b.name}</h2>
       {#if registered(b.registeredAs).length}
         <span class="pill fits">ready</span>
+      {:else if b.optional}
+        <span class="pill">optional</span>
       {:else}
         <span class="pill tight">not set up</span>
       {/if}
@@ -149,6 +192,28 @@
       {/if}
     </div>
     {#if job?.error}<p class="error-text">{job.error}</p>{/if}
+
+    {#if b.id === "llama.cpp-rocm" && info}
+      {@const rocmReady = registered("llama.cpp ROCm").length > 0}
+      <fieldset class="gpu-default">
+        <legend>Default GPU backend for GGUF models</legend>
+        <label class="method">
+          <input type="radio" name="gpu-default" checked={info.settings.gpu_api === "vulkan"} onchange={() => setDefaultGpu("vulkan")} />
+          <b>Vulkan</b> <span class="sub">faster answers; the better pick for most use (recommended)</span>
+        </label>
+        <label class="method" title={rocmReady ? "" : "Install the ROCm build first"}>
+          <input
+            type="radio"
+            name="gpu-default"
+            disabled={!rocmReady && info.settings.gpu_api !== "rocm"}
+            checked={info.settings.gpu_api === "rocm"}
+            onchange={() => setDefaultGpu("rocm")}
+          />
+          <b>ROCm</b> <span class="sub">faster on long prompts{rocmReady ? "" : " · install it first"}</span>
+        </label>
+        <p class="sub">Models can override this in their settings. Loaded models restart on their next request.</p>
+      </fieldset>
+    {/if}
 
     {#if pf}
       {#if pf.ok}
@@ -181,7 +246,7 @@
       <tbody>
         {#each info.installed as i (i.dir)}
           <tr>
-            <td>{i.backend}</td>
+            <td>{i.backend}{i.backend === "llama.cpp" ? (i.gpu_api === "rocm" ? " ROCm" : " Vulkan") : ""}</td>
             <td>{i.version.slice(0, 12)}</td>
             <td>{i.method}</td>
             <td class="mono sub">{i.bin_dir ?? i.image ?? i.prefix}</td>
@@ -231,5 +296,20 @@
   }
   .missing p {
     margin: 0.4rem 0;
+  }
+  .gpu-default {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin: 0.9rem 0 0;
+    padding: 0.5rem 0.8rem 0.6rem;
+    display: grid;
+    gap: 0.35rem;
+  }
+  .gpu-default legend {
+    font-weight: 600;
+    padding: 0 0.3rem;
+  }
+  .gpu-default p {
+    margin: 0.2rem 0 0;
   }
 </style>

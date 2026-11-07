@@ -89,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         installer.set_flm(flm_config(f));
     }
     register_installed_backends(&config, &manager, &installer);
+    manager.set_default_gpu_api(registry.settings().gpu_api).await;
     registry.restore(&manager);
     tracing::info!(
         models = manager.profiles().len(),
@@ -189,7 +190,11 @@ fn build_manager(config: &Config, hw: &HardwareInfo) -> ModelManager {
             (None, Some(image)) => LlamaRuntime::Podman { image: image.clone() },
             (None, None) => unreachable!("validated in Config::parse"),
         };
-        backends.push(Arc::new(LlamaCppBackend::new(LlamaCppConfig { runtime, cpu_threads: l.cpu_threads })));
+        backends.push(Arc::new(LlamaCppBackend::new(LlamaCppConfig {
+            runtime,
+            gpu_api: l.gpu_api,
+            cpu_threads: l.cpu_threads,
+        })));
     }
     if let Some(f) = &config.backends.flm {
         backends.push(Arc::new(FlmBackend::new(flm_config(f))));
@@ -224,16 +229,17 @@ fn flm_config(f: &config::FlmSection) -> FlmConfig {
 }
 
 /// Backends installed by contio (`contio backends install …`) are used for any kind
-/// the config doesn't set explicitly. Newest install wins.
+/// the config doesn't set explicitly. Newest install wins; llama.cpp once per GPU API.
 fn register_installed_backends(config: &Config, manager: &ModelManager, installer: &install_api::Installer) {
-    let configured = |k: BackendKind| match k {
-        BackendKind::LlamaCpp => config.backends.llamacpp.is_some(),
+    let configured = |b: &contio_install::InstalledBackend| match b.backend {
+        BackendKind::LlamaCpp => config.backends.llamacpp.as_ref().is_some_and(|l| l.gpu_api == b.gpu_api),
         BackendKind::Flm => config.backends.flm.is_some(),
         BackendKind::Whisper => config.backends.whisper.is_some(),
     };
     let mut done = Vec::new();
     for installed in contio_install::discover(&installer.data_dir) {
-        if configured(installed.backend) || done.contains(&installed.backend) {
+        let key = (installed.backend, installed.gpu_api);
+        if configured(&installed) || done.contains(&key) {
             continue;
         }
         if let Some(b) = install_api::backend_from_installed(&installed, installer) {
@@ -241,10 +247,11 @@ fn register_installed_backends(config: &Config, manager: &ModelManager, installe
                 backend = installed.backend.dir_name(),
                 version = %installed.version,
                 method = ?installed.method,
+                gpu = %installed.gpu_api,
                 "using installed backend"
             );
             manager.add_backend(b);
-            done.push(installed.backend);
+            done.push(key);
         }
     }
     if manager.backend_names().is_empty() && !manager.profiles().is_empty() {

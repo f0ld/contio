@@ -77,6 +77,9 @@ pub struct LlamaCppSection {
     pub bin_dir: Option<PathBuf>,
     pub image: Option<String>,
     pub cpu_threads: Option<u32>,
+    /// What this build uses for GPU models (`vulkan` or `rocm`).
+    #[serde(default)]
+    pub gpu_api: contio_core::hw::GpuApi,
 }
 
 #[derive(Debug, Deserialize)]

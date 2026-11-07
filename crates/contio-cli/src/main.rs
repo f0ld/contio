@@ -107,8 +107,11 @@ enum Command {
         /// Unload after this many idle seconds (0 = daemon default).
         #[arg(long)]
         idle_ttl: Option<u64>,
+        /// GGUF on the GPU: llama.cpp build to run on (default = the daemon setting).
+        #[arg(long, value_parser = ["vulkan", "rocm", "default"])]
+        gpu: Option<String>,
         /// config.toml models: drop the changes made here and use the file's settings.
-        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl"])]
+        #[arg(long, conflicts_with_all = ["context", "pin", "unpin", "device", "idle_ttl", "gpu"])]
         reset: bool,
     },
     /// Load a model (and keep it loaded until idle/evicted).
@@ -248,6 +251,9 @@ enum BackendsAction {
         backend: String,
         #[arg(long, value_parser = ["source", "prebuilt", "podman"])]
         method: String,
+        /// llama.cpp: GPU API to build for (ROCm: source or podman).
+        #[arg(long, value_parser = ["vulkan", "rocm"], default_value = "vulkan")]
+        gpu: String,
         /// Release tag / commit [default: the version tested by contio]
         #[arg(long)]
         version: Option<String>,
@@ -393,9 +399,11 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             client.delete(&format!("/api/models/{}/overrides", urlencode(&model))).await?;
             eprintln!("{model} uses its config.toml settings again (restarts on next use if it was loaded)");
         }
-        Command::Set { model, context, pin, unpin, device, idle_ttl, reset: false } => {
+        Command::Set { model, context, pin, unpin, device, idle_ttl, gpu, reset: false } => {
             let pinned = if pin { Some(true) } else if unpin { Some(false) } else { None };
-            let body = json!({ "context": context, "pinned": pinned, "device": device, "idle_ttl_secs": idle_ttl });
+            let body = json!({
+                "context": context, "pinned": pinned, "device": device, "idle_ttl_secs": idle_ttl, "gpu_api": gpu,
+            });
             let body = Value::Object(body.as_object().cloned().unwrap_or_default().into_iter().filter(|(_, v)| !v.is_null()).collect());
             if body.as_object().is_some_and(|o| o.is_empty()) {
                 bail!("nothing to change (see `contio set --help`)");
@@ -515,8 +523,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 let raw = client.get("/api/backends").await?;
                 if cli.json { println!("{raw}") } else { println!("{}", format::backends(&raw)) }
             }
-            BackendsAction::Install { backend, method, version, check, detach } => {
-                let pf = client.get(&format!("/api/backends/preflight?backend={backend}&method={method}")).await?;
+            BackendsAction::Install { backend, method, gpu, version, check, detach } => {
+                let pf = client
+                    .get(&format!("/api/backends/preflight?backend={backend}&method={method}&gpu_api={gpu}"))
+                    .await?;
                 if check || pf["ok"] != true {
                     println!("{}", format::preflight(&pf));
                     if pf["ok"] != true {
@@ -525,7 +535,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     return Ok(());
                 }
                 let r = client
-                    .post("/api/backends/install", &json!({"backend": backend, "method": method, "version": version}))
+                    .post(
+                        "/api/backends/install",
+                        &json!({"backend": backend, "method": method, "version": version, "gpu_api": gpu}),
+                    )
                     .await?;
                 if client.follow(r["job_id"].as_u64().unwrap_or_default(), detach).await?.is_some() {
                     eprintln!("installed and registered; models using {backend} can be loaded now");

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { deleteAlias, errorText, formatContext, resetOverrides, setAlias, updateModel } from "$lib/daemon";
-  import type { Alias, ModelPatch, ModelStatus } from "$lib/types";
+  import { deleteAlias, errorText, fetchBackends, formatContext, resetOverrides, setAlias, updateModel } from "$lib/daemon";
+  import type { Alias, BackendsInfo, GpuApi, ModelPatch, ModelStatus } from "$lib/types";
 
   /** Launch settings and aliases of one model. Changes to config.toml models are saved as overrides. */
   let {
@@ -18,6 +18,12 @@
   let pinned = $state(initial.pinned);
   let ttlMinutes = $state<number | null>(initial.idle_ttl_secs ? Math.round(initial.idle_ttl_secs / 60) : null);
   let extraArgs = $state(initial.extra_args.join(" "));
+  let gpuApi = $state<GpuApi | "default">(initial.gpu_api ?? "default");
+  let backends = $state<BackendsInfo | null>(null);
+  const isGguf = initial.source.format === "gguf";
+  if (isGguf) fetchBackends().then((b) => (backends = b), () => {});
+  const hasBuild = (api: GpuApi) => backends?.registered.some((r) => r.startsWith(`llama.cpp ${api === "rocm" ? "ROCm" : "Vulkan"}`));
+  const API_NAME = { vulkan: "Vulkan", rocm: "ROCm" } as const;
   let saving = $state(false);
   let error = $state<string | null>(null);
   let newAlias = $state("");
@@ -35,6 +41,7 @@
     if (ttl !== (initial.idle_ttl_secs ?? 0)) p.idle_ttl_secs = ttl;
     const args = extraArgs.split(/\s+/).filter(Boolean);
     if (args.join(" ") !== initial.extra_args.join(" ")) p.extra_args = args;
+    if (gpuApi !== (initial.gpu_api ?? "default")) p.gpu_api = gpuApi;
     return p;
   }
   let dirty = $derived(Object.keys(changes()).length > 0);
@@ -106,6 +113,18 @@
         <span>{model.device.toUpperCase()}</span>
       {/if}
     </label>
+    {#if isGguf && device === "gpu"}
+      <label title="llama.cpp build for this model. Vulkan writes answers faster, ROCm reads long prompts faster.">
+        GPU backend
+        <select bind:value={gpuApi}>
+          <option value="default">Default{backends ? ` (${API_NAME[backends.settings.gpu_api]})` : ""}</option>
+          <option value="vulkan">Vulkan</option>
+          <option value="rocm" disabled={backends !== null && !hasBuild("rocm") && initial.gpu_api !== "rocm"}>
+            ROCm{backends && !hasBuild("rocm") ? " (not installed)" : ""}
+          </option>
+        </select>
+      </label>
+    {/if}
     <label title="Unload after this many idle minutes; empty or 0 = daemon default">
       Idle unload
       <input type="number" min="0" step="5" bind:value={ttlMinutes} placeholder="default" />

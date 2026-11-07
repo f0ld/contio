@@ -12,6 +12,7 @@ use contio_backends::{
     Backend, FlmBackend, FlmConfig, LlamaCppBackend, LlamaCppConfig, LlamaRuntime, ModelManager, WhisperBackend,
     WhisperConfig,
 };
+use contio_core::hw::GpuApi;
 use contio_install::jobs::{JobCtx, JobInfo, Jobs};
 use contio_install::{
     BackendKind, FLM_DEFAULT_VERSION, InstalledBackend, LLAMACPP_DEFAULT_VERSION, Method, WHISPER_DEFAULT_VERSION,
@@ -90,7 +91,11 @@ pub fn backend_from_installed(b: &InstalledBackend, installer: &Installer) -> Op
                 (None, Some(image)) => LlamaRuntime::Podman { image: image.clone() },
                 _ => return None,
             };
-            Some(Arc::new(LlamaCppBackend::new(LlamaCppConfig { runtime, cpu_threads: Some(installer.cpu_threads) })))
+            Some(Arc::new(LlamaCppBackend::new(LlamaCppConfig {
+                runtime,
+                gpu_api: b.gpu_api,
+                cpu_threads: Some(installer.cpu_threads),
+            })))
         }
         BackendKind::Flm => {
             let config = installer.flm_config(b.prefix.clone()?);
@@ -111,10 +116,11 @@ pub async fn install_and_register(
     backend: BackendKind,
     method: Method,
     version: &str,
+    gpu_api: GpuApi,
     ctx: &JobCtx,
 ) -> Result<InstalledBackend, String> {
     let installed = match backend {
-        BackendKind::LlamaCpp => install_llamacpp(&inst.http, &inst.data_dir, method, version, ctx).await?,
+        BackendKind::LlamaCpp => install_llamacpp(&inst.http, &inst.data_dir, method, version, gpu_api, ctx).await?,
         BackendKind::Flm => install_flm(&inst.data_dir, method, version, ctx).await?,
         BackendKind::Whisper => install_whisper(&inst.data_dir, method, version, ctx).await?,
     };
@@ -197,6 +203,8 @@ pub async fn retry_job(State(state): State<AppState>, UrlPath(id): UrlPath<u64>)
 pub struct BackendQuery {
     pub backend: BackendKind,
     pub method: Method,
+    #[serde(default)]
+    pub gpu_api: GpuApi,
 }
 
 pub async fn list_backends(State(state): State<AppState>) -> Response {
@@ -214,7 +222,7 @@ pub async fn list_backends(State(state): State<AppState>) -> Response {
 
 pub async fn preflight(Query(q): Query<BackendQuery>) -> Response {
     let pf = tokio::task::spawn_blocking(move || match q.backend {
-        BackendKind::LlamaCpp => llamacpp_preflight(q.method),
+        BackendKind::LlamaCpp => llamacpp_preflight(q.method, q.gpu_api),
         BackendKind::Flm => flm_preflight(q.method),
         BackendKind::Whisper => whisper_preflight(q.method),
     })
@@ -230,6 +238,13 @@ pub struct InstallRequest {
     pub method: Method,
     #[serde(default)]
     pub version: Option<String>,
+    /// llama.cpp: build for Vulkan (default) or ROCm.
+    #[serde(default, skip_serializing_if = "is_vulkan")]
+    pub gpu_api: GpuApi,
+}
+
+fn is_vulkan(api: &GpuApi) -> bool {
+    *api == GpuApi::Vulkan
 }
 
 pub async fn install_backend(State(state): State<AppState>, Json(req): Json<InstallRequest>) -> Response {
@@ -250,11 +265,14 @@ fn start_backend_install(state: &AppState, req: InstallRequest) -> Result<u64, S
     }
     let inst = state.installer.clone();
     let manager = state.manager.clone();
-    let title = format!("{} {version} ({:?})", req.backend.dir_name(), req.method).to_lowercase();
-    let key = Some(format!("install:{}", req.backend.dir_name()));
+    let rocm = req.backend == BackendKind::LlamaCpp && req.gpu_api == GpuApi::Rocm;
+    let flavor = if rocm { " rocm" } else { "" };
+    let title = format!("{}{flavor} {version} ({:?})", req.backend.dir_name(), req.method).to_lowercase();
+    let key = Some(format!("install:{}{}", req.backend.dir_name(), flavor.replace(' ', ":")));
     let spec = serde_json::to_value(JobSpec::InstallBackend(req.clone())).ok();
     Ok(inst.jobs.clone().spawn_with_spec("install", &title, key, spec, move |ctx| async move {
-        let installed = install_and_register(&inst, &manager, req.backend, req.method, &version, &ctx).await?;
+        let installed =
+            install_and_register(&inst, &manager, req.backend, req.method, &version, req.gpu_api, &ctx).await?;
         serde_json::to_value(&installed).map_err(|e| e.to_string())
     }))
 }
@@ -269,8 +287,14 @@ pub async fn put_settings(State(state): State<AppState>, Json(settings): Json<Se
     if settings.flm_method != Method::Source || settings.whisper_method != Method::Source {
         return bad_request("FastFlowLM and whisper.cpp can only be installed from source");
     }
+    if settings.gpu_api != state.manager.default_gpu_api() && !state.manager.has_gpu_build(settings.gpu_api) {
+        return bad_request(&format!("install the llama.cpp {} build first", settings.gpu_api));
+    }
     match state.registry.set_settings(settings.clone()) {
-        Ok(()) => Json(settings).into_response(),
+        Ok(()) => {
+            state.manager.set_default_gpu_api(settings.gpu_api).await;
+            Json(settings).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": e.to_string()}})))
             .into_response(),
     }
@@ -305,9 +329,11 @@ mod tests {
             bin_dir: None,
             image: Some("img".into()),
             prefix: None,
+            gpu_api: GpuApi::Rocm,
             installed_at: 1,
         };
-        assert_eq!(backend_from_installed(&b, &inst).unwrap().name(), "llama.cpp");
+        let llama = backend_from_installed(&b, &inst).unwrap();
+        assert_eq!((llama.name(), llama.gpu_api()), ("llama.cpp", Some(GpuApi::Rocm)));
         b.image = None;
         assert!(backend_from_installed(&b, &inst).is_none(), "marker without runtime");
         assert!(inst.flm().is_none());
@@ -324,10 +350,12 @@ mod tests {
             backend: BackendKind::LlamaCpp,
             method: Method::Prebuilt,
             version: None,
+            gpu_api: GpuApi::Vulkan,
         });
         let v = serde_json::to_value(&spec).unwrap();
         assert_eq!(v["type"], "install_backend");
         assert_eq!(v["backend"], "llama.cpp");
+        assert!(v.get("gpu_api").is_none(), "Vulkan stays implicit in stored job specs");
         assert!(matches!(serde_json::from_value::<JobSpec>(v).unwrap(), JobSpec::InstallBackend(_)));
     }
 }

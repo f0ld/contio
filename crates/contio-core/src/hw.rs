@@ -13,6 +13,31 @@ pub enum DeviceKind {
     Hybrid,
 }
 
+/// The GPU API llama.cpp is built for. Vulkan is the default: it decodes 5–8%
+/// faster on gfx1150, ROCm prefills long prompts 3–9% faster (m0-gpu.md §8).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GpuApi {
+    #[default]
+    Vulkan,
+    Rocm,
+}
+
+impl GpuApi {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Vulkan => "Vulkan",
+            Self::Rocm => "ROCm",
+        }
+    }
+}
+
+impl std::fmt::Display for GpuApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// Unified memory is split into pools that are budgeted separately (spec §7.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

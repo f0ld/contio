@@ -39,6 +39,9 @@ pub fn models(models: &[ModelStatus]) -> String {
         .iter()
         .map(|m| {
             let mut device = format!("{:?}", m.device).to_lowercase();
+            if m.gpu_api_used == Some(contio_core::hw::GpuApi::Rocm) {
+                device.push_str("/rocm"); // Vulkan is the norm; only the exception is shown
+            }
             if m.kind != ModelKind::Chat {
                 device = format!("{device} ({})", format!("{:?}", m.kind).to_lowercase());
             }
@@ -882,7 +885,8 @@ pub fn backends(raw: &Value) -> String {
         s.push_str("installed:");
         for b in installed {
             let at = b["bin_dir"].as_str().or(b["image"].as_str()).or(b["prefix"].as_str()).unwrap_or("?");
-            let _ = write!(s, "\n  {} {} ({})  {at}", b["backend"].as_str().unwrap_or("?"), b["version"].as_str().unwrap_or("?"), b["method"].as_str().unwrap_or("?"));
+            let gpu = if b["backend"] == "llama.cpp" && b["gpu_api"] == "rocm" { " ROCm" } else { "" };
+            let _ = write!(s, "\n  {}{gpu} {} ({})  {at}", b["backend"].as_str().unwrap_or("?"), b["version"].as_str().unwrap_or("?"), b["method"].as_str().unwrap_or("?"));
         }
     }
     s
@@ -949,6 +953,8 @@ mod tests {
         ModelStatus {
             id: id.into(),
             device: DeviceKind::Gpu,
+            gpu_api: None,
+            gpu_api_used: None,
             kind: ModelKind::Chat,
             context: Some(32768),
             managed: id != "a",

@@ -1,13 +1,15 @@
-//! llama.cpp installers: source build (Vulkan), prebuilt release, Podman image.
+//! llama.cpp installers: source build (Vulkan or ROCm), prebuilt release
+//! (Vulkan), Podman image (Vulkan or ROCm).
 
 use std::path::{Path, PathBuf};
 
+use contio_core::hw::GpuApi;
 use serde_json::Value;
 use tokio::process::Command;
 
 use crate::download::{Remote, fetch};
 use crate::jobs::JobCtx;
-use crate::preflight::{self, LLAMACPP_SOURCE_PACKAGES, Preflight};
+use crate::preflight::{self, LLAMACPP_ROCM_SOURCE_PACKAGES, LLAMACPP_SOURCE_PACKAGES, Preflight};
 use crate::{BackendKind, InstalledBackend, Method, git_checkout, install_dir, now, run_logged};
 
 /// Release tested in M0 (docs/spikes/m0-gpu.md).
@@ -16,17 +18,40 @@ const REPO: &str = "https://github.com/ggml-org/llama.cpp.git";
 const RELEASES_API: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags";
 const IMAGE: &str = "ghcr.io/ggml-org/llama.cpp";
 
+/// The prebuilt ROCm release targets a newer ROCm than Fedora ships.
+const NO_PREBUILT_ROCM: &str =
+    "there is no prebuilt ROCm llama.cpp for Fedora's ROCm; install the ROCm build from source or with podman";
+
 /// What `method` needs that's missing. Blocking.
-pub fn llamacpp_preflight(method: Method) -> Preflight {
-    match method {
-        Method::Source => preflight::check(LLAMACPP_SOURCE_PACKAGES, &[]),
-        Method::Prebuilt => preflight::check(&[], &["tar"]),
-        Method::Podman => preflight::check(&[], &["podman"]),
+pub fn llamacpp_preflight(method: Method, gpu_api: GpuApi) -> Preflight {
+    let mut p = match (method, gpu_api) {
+        (Method::Source, GpuApi::Vulkan) => preflight::check(LLAMACPP_SOURCE_PACKAGES, &[]),
+        (Method::Source, GpuApi::Rocm) => preflight::check(LLAMACPP_ROCM_SOURCE_PACKAGES, &["hipconfig"]),
+        (Method::Prebuilt, _) => preflight::check(&[], &["tar"]),
+        (Method::Podman, _) => preflight::check(&[], &["podman"]),
+    };
+    if gpu_api == GpuApi::Rocm {
+        if method == Method::Prebuilt {
+            p.notes.push(NO_PREBUILT_ROCM.into());
+        }
+        if !Path::new("/dev/kfd").exists() {
+            p.notes.push("/dev/kfd is missing: the amdgpu driver doesn't offer ROCm (compute) on this system".into());
+        }
     }
+    p
 }
 
-pub fn image_ref(version: &str) -> String {
-    if version == "latest" { format!("{IMAGE}:server-vulkan") } else { format!("{IMAGE}:server-vulkan-{version}") }
+/// `server-vulkan-b12068`, `server-rocm` (latest), …
+pub fn image_ref(version: &str, gpu_api: GpuApi) -> String {
+    let flavor = image_flavor(gpu_api);
+    if version == "latest" { format!("{IMAGE}:{flavor}") } else { format!("{IMAGE}:{flavor}-{version}") }
+}
+
+fn image_flavor(gpu_api: GpuApi) -> &'static str {
+    match gpu_api {
+        GpuApi::Vulkan => "server-vulkan",
+        GpuApi::Rocm => "server-rocm",
+    }
 }
 
 pub async fn install_llamacpp(
@@ -34,14 +59,16 @@ pub async fn install_llamacpp(
     data_dir: &Path,
     method: Method,
     version: &str,
+    gpu_api: GpuApi,
     ctx: &JobCtx,
 ) -> Result<InstalledBackend, String> {
     ctx.step("checking prerequisites");
-    let pf = tokio::task::spawn_blocking(move || llamacpp_preflight(method)).await.map_err(|e| e.to_string())?;
-    if !pf.ok() {
+    let pf =
+        tokio::task::spawn_blocking(move || llamacpp_preflight(method, gpu_api)).await.map_err(|e| e.to_string())?;
+    if !pf.ok() || (gpu_api == GpuApi::Rocm && !pf.notes.is_empty()) {
         return Err(pf.error());
     }
-    let dir = install_dir(data_dir, BackendKind::LlamaCpp, version, method);
+    let dir = install_dir(data_dir, BackendKind::LlamaCpp, version, method, gpu_api);
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let mut installed = InstalledBackend {
         backend: BackendKind::LlamaCpp,
@@ -51,16 +78,18 @@ pub async fn install_llamacpp(
         bin_dir: None,
         image: None,
         prefix: None,
+        gpu_api,
         installed_at: 0,
     };
 
     match method {
-        Method::Source => installed.bin_dir = Some(build_from_source(version, &dir, ctx).await?),
+        Method::Source => installed.bin_dir = Some(build_from_source(version, &dir, gpu_api, ctx).await?),
+        Method::Prebuilt if gpu_api == GpuApi::Rocm => return Err(NO_PREBUILT_ROCM.into()),
         Method::Prebuilt => installed.bin_dir = Some(install_prebuilt(http, data_dir, version, &dir, ctx).await?),
         Method::Podman => {
             // Not every release gets an image (M1: b12068 had none, b12063 did).
             ctx.step("resolving image tag");
-            let resolved = match resolve_image_version(http, version).await {
+            let resolved = match resolve_image_version(http, version, gpu_api).await {
                 Ok(v) => v,
                 Err(e) => {
                     ctx.log(&format!("tag lookup failed ({e}); trying {version} as given"));
@@ -70,7 +99,7 @@ pub async fn install_llamacpp(
             if resolved != version {
                 ctx.log(&format!("no image for {version}; using the closest older one: {resolved}"));
             }
-            let image = image_ref(&resolved);
+            let image = image_ref(&resolved, gpu_api);
             ctx.step(&format!("pulling {image}"));
             run_logged(ctx, Command::new("podman").args(["pull", &image])).await?;
             installed.version = resolved;
@@ -82,8 +111,9 @@ pub async fn install_llamacpp(
     Ok(installed)
 }
 
-/// The newest `server-vulkan-bN` tag with N ≤ the requested build number.
-async fn resolve_image_version(http: &reqwest::Client, version: &str) -> Result<String, String> {
+/// The newest `server-vulkan-bN` (or `server-rocm-bN`) tag with N ≤ the requested build number.
+async fn resolve_image_version(http: &reqwest::Client, version: &str, gpu_api: GpuApi) -> Result<String, String> {
+    let prefix = format!("{}-", image_flavor(gpu_api));
     let Some(want) = build_number(version) else { return Ok(version.to_owned()) }; // "latest" etc.
     let token: Value = http
         .get("https://ghcr.io/token?scope=repository:ggml-org/llama.cpp:pull")
@@ -101,7 +131,7 @@ async fn resolve_image_version(http: &reqwest::Client, version: &str) -> Result<
         url = next_link(res.headers().get("link").and_then(|v| v.to_str().ok()));
         let page: Value = res.json().await.map_err(|e| e.to_string())?;
         for t in page["tags"].as_array().into_iter().flatten().filter_map(Value::as_str) {
-            if let Some(n) = t.strip_prefix("server-vulkan-").and_then(build_number)
+            if let Some(n) = t.strip_prefix(prefix.as_str()).and_then(build_number)
                 && n <= want
                 && best.is_none_or(|b| n > b)
             {
@@ -109,7 +139,7 @@ async fn resolve_image_version(http: &reqwest::Client, version: &str) -> Result<
             }
         }
     }
-    best.map(|n| format!("b{n}")).ok_or_else(|| format!("no Vulkan image at or below {version}"))
+    best.map(|n| format!("b{n}")).ok_or_else(|| format!("no {gpu_api} image at or below {version}"))
 }
 
 fn build_number(version: &str) -> Option<u64> {
@@ -124,25 +154,38 @@ fn next_link(link: Option<&str>) -> Option<String> {
     l.contains(r#"rel="next""#).then(|| format!("https://ghcr.io{}", &l[start..end]))
 }
 
-async fn build_from_source(version: &str, dir: &Path, ctx: &JobCtx) -> Result<PathBuf, String> {
+async fn build_from_source(version: &str, dir: &Path, gpu_api: GpuApi, ctx: &JobCtx) -> Result<PathBuf, String> {
     let src = dir.join("src");
     let build = dir.join("build");
     git_checkout(ctx, REPO, version, &src).await?;
-    ctx.step("configuring (Vulkan, native CPU)");
-    run_logged(
-        ctx,
-        Command::new("cmake").arg("-S").arg(&src).arg("-B").arg(&build).args([
-            "-G",
-            "Ninja",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DGGML_NATIVE=ON",
-            "-DGGML_VULKAN=ON",
-            "-DBUILD_SHARED_LIBS=OFF",
-            "-DLLAMA_BUILD_TESTS=OFF",
-            "-DLLAMA_BUILD_EXAMPLES=OFF",
-        ]),
-    )
-    .await?;
+    let mut configure = Command::new("cmake");
+    configure.arg("-S").arg(&src).arg("-B").arg(&build).args([
+        "-G",
+        "Ninja",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DGGML_NATIVE=ON",
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DLLAMA_BUILD_TESTS=OFF",
+        "-DLLAMA_BUILD_EXAMPLES=OFF",
+    ]);
+    match gpu_api {
+        GpuApi::Vulkan => {
+            configure.arg("-DGGML_VULKAN=ON");
+        }
+        GpuApi::Rocm => {
+            let arch = gpu_arch().await?;
+            // HIP's clang and install root, as the Fedora packages lay them out
+            let clang_dir = hipconfig("-l").await?;
+            let hip_path = hipconfig("-R").await?;
+            configure
+                .args(["-DGGML_HIP=ON", &format!("-DAMDGPU_TARGETS={arch}")])
+                .env("HIPCXX", Path::new(&clang_dir).join("clang"))
+                .env("HIP_PATH", hip_path);
+            ctx.log(&format!("GPU architecture: {arch}"));
+        }
+    }
+    ctx.step(&format!("configuring ({gpu_api}, native CPU)"));
+    run_logged(ctx, &mut configure).await?;
     ctx.step("building (a few minutes)");
     let jobs = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).to_string();
     run_logged(
@@ -199,6 +242,23 @@ async fn install_prebuilt(
     Ok(bin)
 }
 
+/// The GPU's LLVM target, e.g. `gfx1150` (from ROCm's `amdgpu-arch`).
+async fn gpu_arch() -> Result<String, String> {
+    let out = Command::new("amdgpu-arch").output().await.map_err(|e| format!("amdgpu-arch: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("gfx"))
+        .map(str::to_owned)
+        .ok_or_else(|| "amdgpu-arch found no AMD GPU usable with ROCm".to_owned())
+}
+
+async fn hipconfig(flag: &str) -> Result<String, String> {
+    let out = Command::new("hipconfig").arg(flag).output().await.map_err(|e| format!("hipconfig: {e}"))?;
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if out.status.success() && !v.is_empty() { Ok(v) } else { Err(format!("hipconfig {flag} printed nothing")) }
+}
+
 /// Fails early if the binary can't run here (e.g. missing shared libraries
 /// in an Ubuntu build on Fedora).
 async fn smoke_test(bin_dir: &Path, ctx: &JobCtx) -> Result<(), String> {
@@ -229,8 +289,9 @@ mod tests {
 
     #[test]
     fn image_refs() {
-        assert_eq!(image_ref("b12068"), "ghcr.io/ggml-org/llama.cpp:server-vulkan-b12068");
-        assert_eq!(image_ref("latest"), "ghcr.io/ggml-org/llama.cpp:server-vulkan");
+        assert_eq!(image_ref("b12068", GpuApi::Vulkan), "ghcr.io/ggml-org/llama.cpp:server-vulkan-b12068");
+        assert_eq!(image_ref("latest", GpuApi::Vulkan), "ghcr.io/ggml-org/llama.cpp:server-vulkan");
+        assert_eq!(image_ref("b12063", GpuApi::Rocm), "ghcr.io/ggml-org/llama.cpp:server-rocm-b12063");
     }
 
     #[test]

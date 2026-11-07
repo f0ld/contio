@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
+use contio_core::hw::GpuApi;
+
 use crate::jobs::JobCtx;
 use crate::preflight::{self, LLAMACPP_SOURCE_PACKAGES, Preflight};
 use crate::{BackendKind, InstalledBackend, Method, git_checkout, install_dir, now, run_logged};
@@ -36,7 +38,7 @@ pub async fn install_whisper(
     if !pf.ok() || !pf.notes.is_empty() {
         return Err(pf.error());
     }
-    let dir = install_dir(data_dir, BackendKind::Whisper, version, method);
+    let dir = install_dir(data_dir, BackendKind::Whisper, version, method, GpuApi::default());
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let bin_dir = build_from_source(version, &dir, ctx).await?;
     let installed = InstalledBackend {
@@ -46,6 +48,7 @@ pub async fn install_whisper(
         dir,
         bin_dir: Some(bin_dir),
         image: None,
+        gpu_api: GpuApi::default(),
         prefix: None,
         installed_at: now(),
     };

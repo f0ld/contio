@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use contio_core::hw::GpuApi;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -72,6 +73,9 @@ pub struct InstalledBackend {
     /// FLM: install prefix (bin/flm, lib/flm, share/flm).
     #[serde(default)]
     pub prefix: Option<PathBuf>,
+    /// llama.cpp: what the build uses for GPU models (installs before ROCm support: Vulkan).
+    #[serde(default)]
+    pub gpu_api: GpuApi,
     pub installed_at: u64,
 }
 
@@ -82,10 +86,14 @@ impl InstalledBackend {
     }
 }
 
-/// Where a given install goes.
-pub fn install_dir(data_dir: &Path, backend: BackendKind, version: &str, method: Method) -> PathBuf {
+/// Where a given install goes; non-default GPU builds get a suffix (`b12068-source-rocm`).
+pub fn install_dir(data_dir: &Path, backend: BackendKind, version: &str, method: Method, gpu_api: GpuApi) -> PathBuf {
     let method = serde_json::to_value(method).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
-    data_dir.join("backends").join(backend.dir_name()).join(format!("{version}-{method}"))
+    let suffix = match gpu_api {
+        GpuApi::Vulkan => "",
+        GpuApi::Rocm => "-rocm",
+    };
+    data_dir.join("backends").join(backend.dir_name()).join(format!("{version}-{method}{suffix}"))
 }
 
 /// All installed backends, newest first.
@@ -167,8 +175,10 @@ mod tests {
     #[test]
     fn install_dirs_and_discovery() {
         let data = tempfile::tempdir().unwrap();
-        let dir = install_dir(data.path(), BackendKind::LlamaCpp, "b12068", Method::Prebuilt);
+        let dir = install_dir(data.path(), BackendKind::LlamaCpp, "b12068", Method::Prebuilt, GpuApi::Vulkan);
         assert!(dir.ends_with("backends/llama.cpp/b12068-prebuilt"));
+        let rocm = install_dir(data.path(), BackendKind::LlamaCpp, "b12068", Method::Source, GpuApi::Rocm);
+        assert!(rocm.ends_with("backends/llama.cpp/b12068-source-rocm"));
 
         let mut a = InstalledBackend {
             backend: BackendKind::LlamaCpp,
@@ -178,12 +188,13 @@ mod tests {
             bin_dir: Some(dir.join("bin")),
             image: None,
             prefix: None,
+            gpu_api: GpuApi::Vulkan,
             installed_at: 10,
         };
         std::fs::create_dir_all(&dir).unwrap();
         a.write_marker().unwrap();
 
-        let flm_dir = install_dir(data.path(), BackendKind::Flm, "d4a4553", Method::Source);
+        let flm_dir = install_dir(data.path(), BackendKind::Flm, "d4a4553", Method::Source, GpuApi::Vulkan);
         std::fs::create_dir_all(&flm_dir).unwrap();
         let b = InstalledBackend {
             backend: BackendKind::Flm,
@@ -193,6 +204,7 @@ mod tests {
             bin_dir: None,
             image: None,
             prefix: Some(flm_dir.join("prefix")),
+            gpu_api: GpuApi::Vulkan,
             installed_at: 20,
         };
         b.write_marker().unwrap();
@@ -202,6 +214,9 @@ mod tests {
         assert_eq!(found, vec![b, a.clone()], "newest first");
         a.installed_at = 0;
         assert_eq!(serde_json::to_value(&a).unwrap()["backend"], "llama.cpp");
+        let mut old = serde_json::to_value(&a).unwrap();
+        old.as_object_mut().unwrap().remove("gpu_api");
+        assert_eq!(serde_json::from_value::<InstalledBackend>(old).unwrap().gpu_api, GpuApi::Vulkan, "older markers");
     }
 
     #[tokio::test]

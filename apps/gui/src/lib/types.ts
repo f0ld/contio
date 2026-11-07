@@ -79,9 +79,16 @@ export type ModelSource =
   | { format: "flm"; tag: string }
   | { format: "whisper"; path: string };
 
+/** llama.cpp build for GPU models (m0-gpu.md §8). */
+export type GpuApi = "vulkan" | "rocm";
+
 export type ModelStatus = {
   id: string;
   device: DeviceKind;
+  /** The model's own choice; null follows the daemon default. */
+  gpu_api: GpuApi | null;
+  /** What it runs with (GGUF on the GPU only). */
+  gpu_api_used: GpuApi | null;
   kind: ModelKind;
   context: number | null;
   /** Installed through contio (removable); false for config.toml models. */
@@ -115,6 +122,7 @@ export interface ModelPatch {
   idle_ttl_secs?: number;
   device?: "gpu" | "cpu";
   extra_args?: string[];
+  gpu_api?: GpuApi | "default";
 }
 
 // Mirrors crates/contiod/src/catalog_api.rs.
@@ -279,6 +287,7 @@ export interface InstalledBackend {
   bin_dir: string | null;
   image: string | null;
   prefix: string | null;
+  gpu_api: GpuApi;
   installed_at: number;
 }
 
@@ -286,6 +295,8 @@ export interface Settings {
   llamacpp_method: InstallMethod;
   flm_method: InstallMethod;
   whisper_method: InstallMethod;
+  /** Default GPU API for GGUF models that don't pick one. */
+  gpu_api: GpuApi;
 }
 
 export interface BackendsInfo {

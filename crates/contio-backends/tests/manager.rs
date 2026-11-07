@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contio_backends::{Backend, BackendError, ManagerConfig, ModelManager};
-use contio_core::hw::{DeviceKind, MemoryPoolKind};
+use contio_core::hw::{DeviceKind, GpuApi, MemoryPoolKind};
 use contio_core::model::{ModelProfile, ModelSource, ModelState};
 use tokio::process::Command;
 
@@ -244,5 +244,63 @@ async fn runtime_registration() {
     assert_eq!(removed.id, "api");
     assert!(matches!(m.acquire("api").await, Err(BackendError::UnknownModel(_))));
     assert!(m.managed_profiles().is_empty());
+    m.shutdown().await;
+}
+
+/// A llama.cpp-like fake: GPU models only for its own API.
+struct ApiBackend(GpuApi);
+
+impl Backend for ApiBackend {
+    fn name(&self) -> &'static str {
+        "llama.cpp"
+    }
+    fn gpu_api(&self) -> Option<GpuApi> {
+        Some(self.0)
+    }
+    fn supports(&self, p: &ModelProfile) -> bool {
+        p.device == DeviceKind::Cpu || p.gpu_api == Some(self.0)
+    }
+    fn command(&self, _p: &ModelProfile, port: u16) -> Result<Command, BackendError> {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_contio-fake-backend"));
+        cmd.args(["--port", &port.to_string()]);
+        Ok(cmd)
+    }
+    fn health_path(&self) -> &'static str {
+        "/health"
+    }
+    fn upstream_model(&self, _p: &ModelProfile) -> String {
+        self.0.to_string()
+    }
+}
+
+#[tokio::test]
+async fn gpu_api_follows_the_default_unless_chosen() {
+    let dir = tempfile::tempdir().unwrap();
+    let gguf = |id: &str| ModelSource::Gguf { path: dir.path().join(format!("{id}.gguf")), mmproj: None };
+    let a = ModelProfile::new("a", gguf("a"), DeviceKind::Gpu);
+    let mut b = ModelProfile::new("b", gguf("b"), DeviceKind::Gpu);
+    b.gpu_api = Some(GpuApi::Vulkan);
+    let config = ManagerConfig {
+        log_dir: dir.path().join("logs"),
+        startup_timeout: Duration::from_secs(10),
+        default_idle_ttl: None,
+        pool_budgets: HashMap::new(),
+    };
+    let m = &ModelManager::new(config, vec![Arc::new(ApiBackend(GpuApi::Vulkan))], vec![a, b]);
+    assert!(m.has_gpu_build(GpuApi::Vulkan) && !m.has_gpu_build(GpuApi::Rocm));
+    assert_eq!(m.acquire("a").await.unwrap().upstream_model, "Vulkan");
+    let used = |id: &str| m.statuses().into_iter().find(|s| s.id == id).unwrap().gpu_api_used;
+    assert_eq!(used("a"), Some(GpuApi::Vulkan));
+
+    // default → ROCm without a ROCm build: a clear error, and the loaded model was stopped
+    m.set_default_gpu_api(GpuApi::Rocm).await;
+    assert_eq!(state(m, "a"), ModelState::Stopped);
+    assert_eq!(used("a"), Some(GpuApi::Rocm));
+    let err = m.acquire("a").await.unwrap_err();
+    assert!(matches!(err, BackendError::MissingGpuBuild { api: GpuApi::Rocm, .. }), "{err}");
+
+    m.add_backend(Arc::new(ApiBackend(GpuApi::Rocm)));
+    assert_eq!(m.acquire("a").await.unwrap().upstream_model, "ROCm");
+    assert_eq!(m.acquire("b").await.unwrap().upstream_model, "Vulkan", "an explicit choice ignores the default");
     m.shutdown().await;
 }
