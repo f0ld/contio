@@ -66,6 +66,7 @@ impl HwProbe {
     /// Cheap snapshot for the live dashboard (sampled ~1 Hz).
     pub fn sample(&self) -> Result<Metrics> {
         let gpu_dir = self.amd_gpu_dir();
+        let split = gpu_dir.as_deref().and_then(apu_power_split);
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -73,6 +74,8 @@ impl HwProbe {
         Ok(Metrics {
             timestamp_ms,
             soc_watts: gpu_dir.as_deref().and_then(|d| self.soc_watts(d)),
+            gpu_watts: split.map(|(gpu, _)| gpu),
+            cpu_watts: split.map(|(_, cpu)| cpu),
             gpu_busy_percent: gpu_dir
                 .as_deref()
                 .and_then(|d| read_u64(&d.join("gpu_busy_percent")).ok())
@@ -265,6 +268,23 @@ impl HwProbe {
         }
         PowerInfo { profile, on_ac, battery_percent }
     }
+}
+
+/// (graphics, all CPU cores) in watts from amdgpu's binary `gpu_metrics`
+/// table. Only the APU layout v3.0 (Strix Point and later) is decoded; its
+/// field offsets come from `struct gpu_metrics_v3_0` in the kernel's
+/// `kgd_pp_interface.h`. Other layouts give `None` instead of guessing.
+fn apu_power_split(dev: &Path) -> Option<(f64, f64)> {
+    const GFX_POWER: usize = 124; // average_gfx_power, mW
+    const CORE_POWER: usize = 132; // average_all_core_power, mW
+    let b = fs::read(dev.join("gpu_metrics")).ok()?;
+    if b.len() < CORE_POWER + 4 || (b[2], b[3]) != (3, 0) {
+        return None;
+    }
+    let mw = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+    let (gfx, core) = (mw(GFX_POWER), mw(CORE_POWER));
+    // the firmware fills fields it doesn't support with all ones
+    (gfx != u32::MAX && core != u32::MAX).then(|| (gfx as f64 / 1e3, core as f64 / 1e3))
 }
 
 // --- helpers ------------------------------------------------------------------

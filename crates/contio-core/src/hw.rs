@@ -149,6 +149,12 @@ pub struct Metrics {
     pub timestamp_ms: u64,
     /// Whole-SoC package power (amdgpu `PPT`), CPU+GPU+NPU.
     pub soc_watts: Option<f64>,
+    /// Graphics power (amdgpu `gpu_metrics` v3, APUs); part of `soc_watts`.
+    #[serde(default)]
+    pub gpu_watts: Option<f64>,
+    /// All CPU cores together (amdgpu `gpu_metrics` v3, APUs); part of `soc_watts`.
+    #[serde(default)]
+    pub cpu_watts: Option<f64>,
     pub gpu_busy_percent: Option<u8>,
     pub pools: Vec<MemoryPool>,
     pub power: PowerInfo,

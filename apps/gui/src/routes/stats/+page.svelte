@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import StackedColumns, { type Column } from "$lib/components/StackedColumns.svelte";
   import TimeSeries from "$lib/components/TimeSeries.svelte";
+  import PanelSeries, { type Panel } from "$lib/components/PanelSeries.svelte";
   import { compactNumber, errorText, fetchDailyUsage, fetchLiveUsage, fetchUsage } from "$lib/daemon";
   import { live as conn } from "$lib/live.svelte";
   import type { DailyUsage, LiveUsage, UsageReport } from "$lib/types";
@@ -27,7 +28,15 @@
 
   async function loadDaily() {
     try {
-      [daily, usage] = await Promise.all([fetchDailyUsage(range), fetchUsage()]);
+      daily = await fetchDailyUsage(range);
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
+  async function loadTotals() {
+    try {
+      usage = await fetchUsage();
     } catch (e) {
       error = errorText(e);
     }
@@ -36,11 +45,14 @@
   onMount(() => {
     pollLive();
     loadDaily();
+    loadTotals();
     const a = setInterval(pollLive, 1000);
     const b = setInterval(loadDaily, 30_000);
+    const c = setInterval(loadTotals, 5000);
     return () => {
       clearInterval(a);
       clearInterval(b);
+      clearInterval(c);
     };
   });
 
@@ -48,6 +60,7 @@
     void range;
     void conn.online;
     loadDaily();
+    loadTotals();
   });
 
   // --- live ---
@@ -61,6 +74,53 @@
       return { t: p.t, v: win.reduce((a, x) => a + x.generated, 0) / win.length };
     });
   });
+  const avg = (xs: (number | null)[], i: number) => {
+    const win = xs.slice(Math.max(0, i - smooth + 1), i + 1).filter((v): v is number => v != null);
+    return xs[i] == null || !win.length ? null : win.reduce((a, v) => a + v, 0) / win.length;
+  };
+  const GIB = 1024 ** 3;
+  let sys = $derived(liveData?.system ?? []);
+  let sysTimes = $derived(sys.map((x) => x.t));
+  let hasPower = $derived(sys.some((x) => x.gpu_watts != null || x.cpu_watts != null));
+  let sysPanels = $derived.by((): Panel[] => {
+    const gpuW = sys.map((x) => x.gpu_watts);
+    const cpuW = sys.map((x) => x.cpu_watts);
+    const gib = (v: number | null) => (v == null ? null : v / GIB);
+    const memMax = Math.max(liveData?.vram_total_bytes ?? 0, liveData?.ram_total_bytes ?? 0) / GIB;
+    const memory: Panel = {
+      title: "Memory in use",
+      unit: "GiB",
+      max: memMax || undefined,
+      format: (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1)),
+      lines: [
+        { label: "VRAM", color: "var(--series-1)", values: sys.map((x) => gib(x.vram_bytes)) },
+        { label: "RAM", color: "var(--series-2)", values: sys.map((x) => gib(x.ram_bytes)) },
+      ],
+    };
+    if (!hasPower) return [memory];
+    return [
+      {
+        title: "Power",
+        unit: "W",
+        format: (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1)),
+        lines: [
+          { label: "GPU", color: "var(--series-1)", values: gpuW.map((_, i) => avg(gpuW, i)) },
+          { label: "CPU", color: "var(--series-2)", values: cpuW.map((_, i) => avg(cpuW, i)) },
+        ],
+      },
+      memory,
+    ];
+  });
+  let allTime = $derived(
+    (usage?.models ?? []).reduce(
+      (a, m) => ({
+        prompt: a.prompt + m.total.prompt_tokens,
+        generated: a.generated + m.total.completion_tokens,
+        requests: a.requests + m.total.requests,
+      }),
+      { prompt: 0, generated: 0, requests: 0 },
+    ),
+  );
   let nowTps = $derived(liveData?.models.reduce((a, m) => a + m.generated_tps_10s, 0) ?? 0);
   let activeModels = $derived((liveData?.models ?? []).filter((m) => m.in_flight > 0 || m.requests_60s > 0 || m.generated_tps_60s > 0));
   let today = $derived(
@@ -146,6 +206,21 @@
     <div class="tile"><span class="label">Requests today</span><span class="value">{compactNumber(today.requests)}</span><span class="sub">since midnight</span></div>
   </div>
   <TimeSeries {points} unit="tok/s" format={(v) => (v >= 100 ? v.toFixed(0) : v.toFixed(1))} />
+  {#if sys.length}
+    <div class="system">
+      <h3>Power and memory</h3>
+      <span class="sub">{hasPower ? "GPU and CPU cores (part of the whole chip's power)" : "this GPU reports no power split"} · VRAM and RAM in use</span>
+      <PanelSeries
+        times={sysTimes}
+        window={points.length ? [points[0].t, points[points.length - 1].t] : undefined}
+        panels={sysPanels}
+        legend={[
+          { label: hasPower ? "GPU · VRAM" : "VRAM", color: "var(--series-1)" },
+          { label: hasPower ? "CPU · RAM" : "RAM", color: "var(--series-2)" },
+        ]}
+      />
+    </div>
+  {/if}
   {#if activeModels.length}
     <table class="list">
       <thead>
@@ -226,6 +301,15 @@
   {/if}
 </section>
 
+<section class="card counter">
+  <span class="label">Tokens served, all models, all time</span>
+  <span class="big">{(allTime.prompt + allTime.generated).toLocaleString()}</span>
+  <span class="sub">
+    {allTime.prompt.toLocaleString()} prompt · {allTime.generated.toLocaleString()} generated ·
+    {allTime.requests.toLocaleString()} requests
+  </span>
+</section>
+
 <style>
   .head {
     display: flex;
@@ -276,6 +360,28 @@
   h3 {
     font-size: 0.95rem;
     margin: 0;
+  }
+  .system {
+    margin-top: 1.2rem;
+  }
+  .system h3 {
+    display: inline;
+    margin-right: 0.5rem;
+  }
+  .counter {
+    display: grid;
+    justify-items: center;
+    gap: 0.2rem;
+    text-align: center;
+  }
+  .counter .label {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .counter .big {
+    font-size: 2.4rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
   .scroll {
     max-height: 24rem;

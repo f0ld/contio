@@ -54,6 +54,9 @@ export interface HardwareInfo {
 export interface Metrics {
   timestamp_ms: number;
   soc_watts: number | null;
+  /** graphics / all CPU cores, parts of soc_watts (APUs with gpu_metrics v3) */
+  gpu_watts: number | null;
+  cpu_watts: number | null;
   gpu_busy_percent: number | null;
   pools: MemoryPool[];
   power: PowerInfo;
@@ -485,6 +488,10 @@ export interface LiveUsage {
     requests_60s: number;
     in_flight: number;
   }[];
+  /** hardware samples of the same window, about one per second */
+  system: { t: number; gpu_watts: number | null; cpu_watts: number | null; vram_bytes: number | null; ram_bytes: number | null }[];
+  vram_total_bytes: number | null;
+  ram_total_bytes: number | null;
 }
 
 export interface DailyUsage {

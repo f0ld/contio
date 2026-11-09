@@ -76,6 +76,7 @@ impl AppState {
         let usage = crate::usage::UsageTracker::new(bench.clone());
         let (tx, rx) = watch::channel(None);
         let sampler = probe.clone();
+        let history = usage.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -84,6 +85,7 @@ impl AppState {
                 let p = sampler.clone();
                 match tokio::task::spawn_blocking(move || p.sample()).await {
                     Ok(Ok(m)) => {
+                        history.system_add(crate::usage::SystemSample::from_metrics(&m));
                         if tx.send(Some(m)).is_err() {
                             break; // all receivers (incl. AppState) dropped
                         }

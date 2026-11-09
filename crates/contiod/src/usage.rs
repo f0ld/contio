@@ -6,7 +6,7 @@
 //! OpenAI `usage` object as the bytes pass by (SSE chunks, or the end of a
 //! JSON body) and records the request when the response is done or dropped.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use axum::Json;
@@ -19,6 +19,8 @@ use futures_util::{Stream, StreamExt};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use contio_core::hw::{MemoryPoolKind, Metrics};
 
 use crate::api::AppState;
 
@@ -36,6 +38,30 @@ pub struct Tick {
     pub requests: u64,
 }
 
+/// One hardware sample for the live view: power and memory in use.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SystemSample {
+    /// Unix second.
+    pub t: u64,
+    pub gpu_watts: Option<f64>,
+    pub cpu_watts: Option<f64>,
+    pub vram_bytes: Option<u64>,
+    pub ram_bytes: Option<u64>,
+}
+
+impl SystemSample {
+    pub fn from_metrics(m: &Metrics) -> Self {
+        let used = |kind| m.pools.iter().find(|p| p.kind == kind).map(|p| p.used_bytes);
+        Self {
+            t: m.timestamp_ms / 1000,
+            gpu_watts: m.gpu_watts,
+            cpu_watts: m.cpu_watts,
+            vram_bytes: used(MemoryPoolKind::Gpu),
+            ram_bytes: used(MemoryPoolKind::System),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct UsageTracker {
     /// Unix seconds.
@@ -43,6 +69,8 @@ pub struct UsageTracker {
     session: Arc<Mutex<BTreeMap<String, UsageCounts>>>,
     /// Unix second → model → traffic, the last `LIVE_SECONDS`.
     live: Arc<Mutex<BTreeMap<u64, BTreeMap<String, Tick>>>>,
+    /// Hardware samples of the last `LIVE_SECONDS`, oldest first.
+    system: Arc<Mutex<VecDeque<SystemSample>>>,
     store: Store,
     /// Seconds east of UTC, for day boundaries in local time.
     utc_offset: i64,
@@ -54,6 +82,7 @@ impl UsageTracker {
             started_at: unix_now(),
             session: Default::default(),
             live: Default::default(),
+            system: Default::default(),
             store,
             utc_offset: local_utc_offset(),
         }
@@ -96,6 +125,23 @@ impl UsageTracker {
     /// The last `LIVE_SECONDS` seconds, oldest first, per model.
     pub fn live(&self) -> (u64, BTreeMap<u64, BTreeMap<String, Tick>>) {
         (unix_now(), self.live.lock().expect("usage lock poisoned").clone())
+    }
+
+    /// Keep a hardware sample for the live view (one per second at most).
+    pub fn system_add(&self, sample: SystemSample) {
+        let mut v = self.system.lock().expect("usage lock poisoned");
+        if v.back().is_some_and(|last| last.t == sample.t) {
+            v.pop_back();
+        }
+        v.push_back(sample);
+        let oldest = sample.t.saturating_sub(LIVE_SECONDS);
+        while v.front().is_some_and(|s| s.t < oldest) {
+            v.pop_front();
+        }
+    }
+
+    pub fn system(&self) -> Vec<SystemSample> {
+        self.system.lock().expect("usage lock poisoned").iter().copied().collect()
     }
 
     pub fn session(&self) -> Vec<UsageCounts> {
@@ -199,6 +245,10 @@ pub async fn live(State(state): State<AppState>) -> Response {
         total as f64 / secs as f64
     };
     let statuses = state.manager.statuses();
+    let pool_total = |kind| {
+        let m = state.metrics.borrow();
+        m.as_ref().and_then(|m| m.pools.iter().find(|p| p.kind == kind).map(|p| p.total_bytes))
+    };
     let mut names: Vec<String> = window.values().flat_map(|m| m.keys().cloned()).collect();
     names.extend(statuses.iter().filter(|s| s.in_flight > 0).map(|s| s.id.clone()));
     names.sort();
@@ -222,6 +272,9 @@ pub async fn live(State(state): State<AppState>) -> Response {
         "in_flight": statuses.iter().map(|s| s.in_flight).sum::<u32>(),
         "series": series,
         "models": models,
+        "system": state.usage.system(),
+        "vram_total_bytes": pool_total(MemoryPoolKind::Gpu),
+        "ram_total_bytes": pool_total(MemoryPoolKind::System),
     }))
     .into_response()
 }
@@ -583,6 +636,18 @@ mod tests {
         assert_eq!(parse_offset("+0100"), Some(3600));
         assert_eq!(parse_offset("-0530"), Some(-19_800));
         assert_eq!(parse_offset("Z"), None);
+    }
+
+    #[test]
+    fn system_history_keeps_one_sample_per_second_for_the_window() {
+        let t = UsageTracker::new(Store::in_memory().unwrap());
+        let at = |t: u64, gpu: f64| SystemSample { t, gpu_watts: Some(gpu), cpu_watts: None, vram_bytes: Some(1), ram_bytes: None };
+        t.system_add(at(1000, 1.0));
+        t.system_add(at(1001, 2.0));
+        t.system_add(at(1001, 3.0)); // same second: replaces
+        assert_eq!(t.system().iter().map(|s| s.gpu_watts.unwrap()).collect::<Vec<_>>(), [1.0, 3.0]);
+        t.system_add(at(1001 + LIVE_SECONDS, 4.0));
+        assert_eq!(t.system().iter().map(|s| s.t).collect::<Vec<_>>(), [1001, 1001 + LIVE_SECONDS]);
     }
 
     #[test]

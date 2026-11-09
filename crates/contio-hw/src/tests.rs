@@ -43,6 +43,7 @@ fn framework13(root: &Path) {
     write(root, &format!("{gpu}/gpu_busy_percent"), "42\n");
     write(root, &format!("{gpu}/hwmon/hwmon9/power1_label"), "PPT\n");
     write(root, &format!("{gpu}/hwmon/hwmon9/power1_input"), "15020000\n");
+    fs::write(root.join(gpu).join("gpu_metrics"), gpu_metrics_v3(9500, 4250)).unwrap();
     symlink("../../../bus/pci/drivers/amdgpu", root.join(gpu).join("driver")).unwrap();
 
     write(root, "sys/class/accel/accel0/device/.keep", "");
@@ -54,6 +55,31 @@ fn framework13(root: &Path) {
     write(root, "sys/class/power_supply/ACAD/online", "1\n");
     write(root, "sys/class/power_supply/BAT1/type", "Battery\n");
     write(root, "sys/class/power_supply/BAT1/capacity", "87\n");
+}
+
+/// A 264-byte `gpu_metrics_v3_0` table with graphics and core power set (mW).
+fn gpu_metrics_v3(gfx_mw: u32, cores_mw: u32) -> Vec<u8> {
+    let mut b = vec![0u8; 264];
+    b[..4].copy_from_slice(&[0x08, 0x01, 3, 0]);
+    b[124..128].copy_from_slice(&gfx_mw.to_le_bytes());
+    b[132..136].copy_from_slice(&cores_mw.to_le_bytes());
+    b
+}
+
+#[test]
+fn other_gpu_metrics_layouts_give_no_split() {
+    let dir = tempfile::tempdir().unwrap();
+    framework13(dir.path());
+    let file = dir.path().join("sys/class/drm/card1/device/gpu_metrics");
+    let mut v2 = gpu_metrics_v3(9500, 4250);
+    v2[2] = 2; // a v2.x (older APU) table: different offsets
+    fs::write(&file, v2).unwrap();
+    let m = HwProbe::new(dir.path()).sample().unwrap();
+    assert_eq!((m.gpu_watts, m.cpu_watts), (None, None));
+    assert_eq!(m.soc_watts, Some(15.02));
+
+    fs::write(&file, gpu_metrics_v3(u32::MAX, 4250)).unwrap();
+    assert_eq!(HwProbe::new(dir.path()).sample().unwrap().gpu_watts, None);
 }
 
 #[test]
@@ -102,6 +128,7 @@ fn samples_power_and_gpu_busy() {
     framework13(dir.path());
     let m = HwProbe::new(dir.path()).sample().unwrap();
     assert_eq!(m.soc_watts, Some(15.02));
+    assert_eq!((m.gpu_watts, m.cpu_watts), (Some(9.5), Some(4.25)));
     assert_eq!(m.gpu_busy_percent, Some(42));
     assert!(m.timestamp_ms > 0);
 }
