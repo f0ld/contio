@@ -15,8 +15,9 @@ use contio_backends::{
 use contio_core::hw::GpuApi;
 use contio_install::jobs::{JobCtx, JobInfo, Jobs};
 use contio_install::{
-    BackendKind, FLM_DEFAULT_VERSION, InstalledBackend, LLAMACPP_DEFAULT_VERSION, Method, WHISPER_DEFAULT_VERSION,
-    discover, flm_preflight, install_flm, install_llamacpp, install_whisper, llamacpp_preflight, whisper_preflight,
+    BackendKind, FLM_DEFAULT_VERSION, InstalledBackend, LLAMACPP_DEFAULT_VERSION, LLAMACPP_VULKAN_FA_PREVIEW, Method,
+    WHISPER_DEFAULT_VERSION, discover, flm_preflight, install_dir, install_flm, install_llamacpp, install_whisper,
+    llamacpp_preflight, whisper_preflight,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -124,10 +125,41 @@ pub async fn install_and_register(
         BackendKind::Flm => install_flm(&inst.data_dir, method, version, ctx).await?,
         BackendKind::Whisper => install_whisper(&inst.data_dir, method, version, ctx).await?,
     };
-    if let Some(b) = backend_from_installed(&installed, inst) {
+    // the experimental build only runs while switched on (`use_vulkan_preview`)
+    if !installed.is_preview()
+        && let Some(b) = backend_from_installed(&installed, inst)
+    {
         manager.add_backend(b);
     }
     Ok(installed)
+}
+
+fn installed_preview(inst: &Installer) -> Option<InstalledBackend> {
+    discover(&inst.data_dir).into_iter().find(InstalledBackend::is_preview)
+}
+
+/// Switch the experimental Vulkan build (Settings → Experimental) on or off:
+/// it goes in front of the regular Vulkan build, or out again. Loaded Vulkan
+/// models restart on their next request.
+pub async fn use_vulkan_preview(inst: &Installer, manager: &ModelManager, on: bool) -> Result<(), String> {
+    let dir = install_dir(
+        &inst.data_dir,
+        BackendKind::LlamaCpp,
+        LLAMACPP_VULKAN_FA_PREVIEW.version,
+        Method::Source,
+        GpuApi::Vulkan,
+    )
+    .display()
+    .to_string();
+    manager.remove_backends(|b| b.describe().contains(&dir));
+    if on {
+        let b = installed_preview(inst)
+            .and_then(|i| backend_from_installed(&i, inst))
+            .ok_or("the experimental Vulkan build isn't installed")?;
+        manager.add_backend(b);
+    }
+    manager.restart_gpu_models(GpuApi::Vulkan).await;
+    Ok(())
 }
 
 // --- jobs ---------------------------------------------------------------------
@@ -216,6 +248,11 @@ pub async fn list_backends(State(state): State<AppState>) -> Response {
             "llama.cpp": LLAMACPP_DEFAULT_VERSION, "flm": FLM_DEFAULT_VERSION, "whisper.cpp": WHISPER_DEFAULT_VERSION,
         },
         "settings": state.registry.settings(),
+        "preview": {
+            "version": LLAMACPP_VULKAN_FA_PREVIEW.version,
+            "url": LLAMACPP_VULKAN_FA_PREVIEW.url,
+            "installed": installed.iter().any(InstalledBackend::is_preview),
+        },
     }))
     .into_response()
 }
@@ -266,7 +303,13 @@ fn start_backend_install(state: &AppState, req: InstallRequest) -> Result<u64, S
     let inst = state.installer.clone();
     let manager = state.manager.clone();
     let rocm = req.backend == BackendKind::LlamaCpp && req.gpu_api == GpuApi::Rocm;
-    let flavor = if rocm { " rocm" } else { "" };
+    let flavor = if rocm {
+        " rocm"
+    } else if version == LLAMACPP_VULKAN_FA_PREVIEW.version {
+        " experimental"
+    } else {
+        ""
+    };
     let title = format!("{}{flavor} {version} ({:?})", req.backend.dir_name(), req.method).to_lowercase();
     let key = Some(format!("install:{}{}", req.backend.dir_name(), flavor.replace(' ', ":")));
     let spec = serde_json::to_value(JobSpec::InstallBackend(req.clone())).ok();
@@ -290,9 +333,18 @@ pub async fn put_settings(State(state): State<AppState>, Json(settings): Json<Se
     if settings.gpu_api != state.manager.default_gpu_api() && !state.manager.has_gpu_build(settings.gpu_api) {
         return bad_request(&format!("install the llama.cpp {} build first", settings.gpu_api));
     }
+    let preview_changed = settings.vulkan_fa_preview != state.registry.settings().vulkan_fa_preview;
+    if preview_changed && settings.vulkan_fa_preview && installed_preview(&state.installer).is_none() {
+        return bad_request("build the experimental Vulkan build first");
+    }
     match state.registry.set_settings(settings.clone()) {
         Ok(()) => {
             state.manager.set_default_gpu_api(settings.gpu_api).await;
+            if preview_changed
+                && let Err(e) = use_vulkan_preview(&state.installer, &state.manager, settings.vulkan_fa_preview).await
+            {
+                tracing::warn!("{e}");
+            }
             Json(settings).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": e.to_string()}})))
@@ -342,6 +394,50 @@ mod tests {
         assert_eq!(backend_from_installed(&b, &inst).unwrap().name(), "FastFlowLM");
         let flm = inst.flm().expect("FLM config remembered for pulls");
         assert_eq!(flm.model_path, PathBuf::from("/data/models/flm"));
+    }
+
+    #[tokio::test]
+    async fn vulkan_preview_switches_in_front_and_out() {
+        let data = tempfile::tempdir().unwrap();
+        let inst = Installer::in_memory(data.path().into(), 4);
+        let manager = ModelManager::new(
+            contio_backends::ManagerConfig {
+                log_dir: std::env::temp_dir(),
+                startup_timeout: std::time::Duration::from_secs(1),
+                default_idle_ttl: None,
+                pool_budgets: Default::default(),
+            },
+            vec![],
+            vec![],
+        );
+        let regular = |bin: &str| {
+            Arc::new(LlamaCppBackend::new(LlamaCppConfig {
+                runtime: LlamaRuntime::Native { bin_dir: bin.into() },
+                gpu_api: GpuApi::Vulkan,
+                cpu_threads: None,
+            }))
+        };
+        manager.add_backend(regular("/regular/bin"));
+        assert!(use_vulkan_preview(&inst, &manager, true).await.is_err(), "not installed");
+
+        let v = LLAMACPP_VULKAN_FA_PREVIEW.version;
+        let dir = install_dir(data.path(), BackendKind::LlamaCpp, v, Method::Source, GpuApi::Vulkan);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = json!({
+            "backend": "llama.cpp", "method": "source", "version": v, "dir": dir,
+            "bin_dir": dir.join("build/bin"), "gpu_api": "vulkan", "installed_at": 1,
+        });
+        std::fs::write(dir.join("contio-backend.json"), marker.to_string()).unwrap();
+        assert!(installed_preview(&inst).is_some());
+
+        use_vulkan_preview(&inst, &manager, true).await.unwrap();
+        let names = manager.backend_names();
+        assert_eq!(names.len(), 2);
+        assert!(names[0].contains(v), "experimental build first: {names:?}");
+        use_vulkan_preview(&inst, &manager, true).await.unwrap();
+        assert_eq!(manager.backend_names().len(), 2, "switching on twice registers it once");
+        use_vulkan_preview(&inst, &manager, false).await.unwrap();
+        assert_eq!(manager.backend_names(), vec!["llama.cpp Vulkan (native: /regular/bin)".to_owned()]);
     }
 
     #[test]

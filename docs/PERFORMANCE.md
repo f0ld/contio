@@ -277,8 +277,8 @@ With the PR, Vulkan reads as fast as ROCm at 32k and faster at 64k, and it still
 
 **7b** Attention at depth is ~3/4 of reading time: the biggest lever by far. Two concrete targets:
 - **Vulkan: taller tiles**: covered by upstream PR #31323 (above: +60% whole model at 64k). Our
-  part: wait for it to merge (decided 2026-11-10), then reconsider Vulkan for `coder`. Our Br 48
-  hack is superseded.
+  part: wait for it to merge (decided 2026-11-10), then reconsider Vulkan for `coder`. Until then it
+  can be tried from Settings → Experimental (`vulkan_fa_preview`). Our Br 48 hack is superseded.
 - **ROCm: get under the register limit** (Q in LDS, split the 256-wide output across waves), check the
   ISA for spills in the K/V loop, then larger query tiles to cut K/V re-reads (rough estimate: the
   current tiling moves ~8.6 GB per layer at 64k, ~72 ms of the measured 114 ms at full bandwidth).

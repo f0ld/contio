@@ -14,6 +14,23 @@ use crate::{BackendKind, InstalledBackend, Method, git_checkout, install_dir, no
 
 /// Release tested in M0 (docs/spikes/m0-gpu.md).
 pub const LLAMACPP_DEFAULT_VERSION: &str = "b12068";
+/// An unmerged upstream change, built from source at a fixed commit. Used only while
+/// switched on in Settings → Experimental; temporary until it's in a release.
+pub struct LlamaCppPreview {
+    /// Install label: directory name and [`InstalledBackend::version`].
+    pub version: &'static str,
+    /// Commit to build.
+    pub rev: &'static str,
+    pub url: &'static str,
+}
+
+/// Vulkan flash attention with 64-row tiles on RDNA3/4 iGPUs (docs/PERFORMANCE.md §7b):
+/// +29% prompt reading at 32k, +60% at 64k on the Radeon 890M.
+pub const LLAMACPP_VULKAN_FA_PREVIEW: LlamaCppPreview = LlamaCppPreview {
+    version: "pr31323-9731be4",
+    rev: "9731be4936ecdfe33c5372ad281479f40905f4c3",
+    url: "https://github.com/ggml-org/llama.cpp/pull/31323",
+};
 const REPO: &str = "https://github.com/ggml-org/llama.cpp.git";
 const RELEASES_API: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags";
 const IMAGE: &str = "ghcr.io/ggml-org/llama.cpp";
@@ -68,6 +85,10 @@ pub async fn install_llamacpp(
     if !pf.ok() || (gpu_api == GpuApi::Rocm && !pf.notes.is_empty()) {
         return Err(pf.error());
     }
+    let preview = version == LLAMACPP_VULKAN_FA_PREVIEW.version;
+    if preview && (method, gpu_api) != (Method::Source, GpuApi::Vulkan) {
+        return Err("the experimental build is a Vulkan build from source".into());
+    }
     let dir = install_dir(data_dir, BackendKind::LlamaCpp, version, method, gpu_api);
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     let mut installed = InstalledBackend {
@@ -83,7 +104,10 @@ pub async fn install_llamacpp(
     };
 
     match method {
-        Method::Source => installed.bin_dir = Some(build_from_source(version, &dir, gpu_api, ctx).await?),
+        Method::Source => {
+            let rev = if preview { LLAMACPP_VULKAN_FA_PREVIEW.rev } else { version };
+            installed.bin_dir = Some(build_from_source(rev, &dir, gpu_api, ctx).await?);
+        }
         Method::Prebuilt if gpu_api == GpuApi::Rocm => return Err(NO_PREBUILT_ROCM.into()),
         Method::Prebuilt => installed.bin_dir = Some(install_prebuilt(http, data_dir, version, &dir, ctx).await?),
         Method::Podman => {
@@ -154,10 +178,10 @@ fn next_link(link: Option<&str>) -> Option<String> {
     l.contains(r#"rel="next""#).then(|| format!("https://ghcr.io{}", &l[start..end]))
 }
 
-async fn build_from_source(version: &str, dir: &Path, gpu_api: GpuApi, ctx: &JobCtx) -> Result<PathBuf, String> {
+async fn build_from_source(rev: &str, dir: &Path, gpu_api: GpuApi, ctx: &JobCtx) -> Result<PathBuf, String> {
     let src = dir.join("src");
     let build = dir.join("build");
-    git_checkout(ctx, REPO, version, &src).await?;
+    git_checkout(ctx, REPO, rev, &src).await?;
     let mut configure = Command::new("cmake");
     configure.arg("-S").arg(&src).arg("-B").arg(&build).args([
         "-G",

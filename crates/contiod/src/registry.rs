@@ -26,6 +26,9 @@ pub struct Settings {
     pub gpu_api: GpuApi,
     /// Hold the `performance` power profile while a model works (docs/PERFORMANCE.md §2e).
     pub serve_power: crate::boost::ServePower,
+    /// Experimental: run Vulkan models on the llama.cpp build of an unmerged
+    /// upstream change (`LLAMACPP_VULKAN_FA_PREVIEW`). Temporary.
+    pub vulkan_fa_preview: bool,
 }
 
 impl Default for Settings {
@@ -37,6 +40,7 @@ impl Default for Settings {
             whisper_method: Method::Source,
             gpu_api: GpuApi::Vulkan,
             serve_power: crate::boost::ServePower::Off,
+            vulkan_fa_preview: false,
         }
     }
 }

@@ -99,8 +99,8 @@ export const fetchBackends = () => request<BackendsInfo>("/api/backends");
 export const checkPreflight = (backend: BackendId, method: InstallMethod, gpu_api: GpuApi = "vulkan") =>
   request<PreflightResult>(`/api/backends/preflight?backend=${enc(backend)}&method=${method}&gpu_api=${gpu_api}`);
 
-export const installBackend = (backend: BackendId, method: InstallMethod, gpu_api: GpuApi = "vulkan") =>
-  send<{ job_id: number }>("/api/backends/install", "POST", { backend, method, gpu_api });
+export const installBackend = (backend: BackendId, method: InstallMethod, gpu_api: GpuApi = "vulkan", version?: string) =>
+  send<{ job_id: number }>("/api/backends/install", "POST", { backend, method, gpu_api, version });
 
 export const fetchSettings = () => request<Settings>("/api/settings");
 

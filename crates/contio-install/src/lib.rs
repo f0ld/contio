@@ -21,7 +21,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub use flm::{FLM_DEFAULT_VERSION, flm_preflight, install_flm};
-pub use llamacpp::{LLAMACPP_DEFAULT_VERSION, install_llamacpp, llamacpp_preflight};
+pub use llamacpp::{
+    LLAMACPP_DEFAULT_VERSION, LLAMACPP_VULKAN_FA_PREVIEW, LlamaCppPreview, install_llamacpp, llamacpp_preflight,
+};
 pub use whisper::{WHISPER_DEFAULT_VERSION, install_whisper, whisper_preflight};
 
 use crate::jobs::JobCtx;
@@ -80,6 +82,12 @@ pub struct InstalledBackend {
 }
 
 impl InstalledBackend {
+    /// The experimental llama.cpp build ([`LLAMACPP_VULKAN_FA_PREVIEW`]): never used
+    /// unless switched on in the settings.
+    pub fn is_preview(&self) -> bool {
+        self.backend == BackendKind::LlamaCpp && self.version == LLAMACPP_VULKAN_FA_PREVIEW.version
+    }
+
     fn write_marker(&self) -> Result<(), String> {
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(self.dir.join(MARKER), json).map_err(|e| format!("writing marker: {e}"))

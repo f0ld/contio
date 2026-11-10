@@ -327,6 +327,8 @@ export interface Settings {
   /** Default GPU API for GGUF models that don't pick one. */
   gpu_api: GpuApi;
   serve_power: "off" | "always" | "on_ac";
+  /** Experimental, temporary: Vulkan models run on a llama.cpp build of an unmerged upstream change. */
+  vulkan_fa_preview: boolean;
 }
 
 export interface BackendsInfo {
@@ -334,6 +336,8 @@ export interface BackendsInfo {
   installed: InstalledBackend[];
   defaults: Record<BackendId, string>;
   settings: Settings;
+  /** The experimental llama.cpp build (Settings → Experimental). */
+  preview: { version: string; url: string; installed: boolean };
 }
 
 export interface PreflightResult {

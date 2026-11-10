@@ -1,8 +1,9 @@
 <script lang="ts">
   import PerfSetting from "$lib/components/PerfSetting.svelte";
-  import { errorText, fetchSettings, saveSettings } from "$lib/daemon";
+  import { errorText, fetchBackends, fetchSettings, installBackend, saveSettings } from "$lib/daemon";
+  import { jobs, refreshJobs } from "$lib/jobs.svelte";
   import { PERF_SETTINGS } from "$lib/performance";
-  import type { Settings } from "$lib/types";
+  import type { BackendsInfo, Settings } from "$lib/types";
   import { daemonInfo, daemonStart, daemonStop, isDesktop, serviceSet, type DaemonInfo } from "$lib/desktop";
   import { live } from "$lib/live.svelte";
 
@@ -49,6 +50,40 @@
       settings = await saveSettings({ ...settings, serve_power: v });
     } catch (e) {
       error = errorText(e);
+    }
+  }
+
+  // Experimental llama.cpp build (temporary; remove with LLAMACPP_VULKAN_FA_PREVIEW in contio-install)
+  let preview = $state<BackendsInfo["preview"] | null>(null);
+  let previewJob = $state<number | null>(null);
+  let previewBusy = $state(false);
+  $effect(() => {
+    if (live.online && !preview) fetchBackends().then((b) => (preview = b.preview), (e) => (error = errorText(e)));
+  });
+  // reload when the build finishes
+  $effect(() => {
+    if (jobs.byId(previewJob)?.state === "done") fetchBackends().then((b) => (preview = b.preview));
+  });
+
+  async function buildPreview() {
+    if (!preview) return;
+    try {
+      previewJob = (await installBackend("llama.cpp", "source", "vulkan", preview.version)).job_id;
+      refreshJobs();
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
+  async function setPreview(on: boolean) {
+    if (!settings) return;
+    previewBusy = true;
+    try {
+      settings = await saveSettings({ ...settings, vulkan_fa_preview: on });
+    } catch (e) {
+      error = errorText(e);
+    } finally {
+      previewBusy = false;
     }
   }
 
@@ -123,6 +158,55 @@
   </section>
 {/if}
 
+{#if settings && preview}
+  {@const job = jobs.byId(previewJob)}
+  <section class="card experimental">
+    <h2><span class="badge">Experimental</span><span class="badge">Temporary</span> Faster long prompts on Vulkan</h2>
+    <p class="sub">
+      Runs Vulkan models on a llama.cpp build of an <b>unmerged</b> upstream change,
+      <a href={preview.url} target="_blank" rel="noreferrer">pull request #31323</a> (taller flash-attention tiles on
+      Radeon iGPUs), built from source at a fixed commit (<code>{preview.version}</code>). It is not a llama.cpp
+      release: it may have bugs, and this option will be removed once the change is in a release.
+    </p>
+    <ul class="sub facts">
+      <li>Measured on the Radeon 890M: prompt reading <b>+29% at 32k</b> and <b>+60% at 64k</b> tokens of context; writing unchanged.</li>
+      <li>Only models on Vulkan use it. ROCm models are unaffected.</li>
+      <li>Switching restarts loaded Vulkan models on their next request. Switch off to go back to the regular build.</li>
+    </ul>
+
+    <div class="actions">
+      <button disabled={job?.state === "running"} onclick={buildPreview}>
+        {preview.installed ? "Rebuild" : "Build it"}
+      </button>
+      {#if job}
+        <span class="sub">
+          job #{job.id}: {job.state === "running" ? job.step ?? "starting" : job.state} · <a href="/jobs">details</a>
+        </span>
+      {:else}
+        <span class="sub">
+          {preview.installed
+            ? "Built."
+            : "~5 minutes; needs the same packages as building llama.cpp from source (Backends → Check prerequisites)."}
+        </span>
+      {/if}
+    </div>
+    {#if job?.error}<p class="error-text">{job.error}</p>{/if}
+
+    <label class="toggle">
+      <input
+        type="checkbox"
+        checked={settings.vulkan_fa_preview}
+        disabled={previewBusy || (!preview.installed && !settings.vulkan_fa_preview)}
+        onchange={(e) => setPreview(e.currentTarget.checked)}
+      />
+      <span>
+        <b>Use the experimental build for Vulkan models</b>
+        <span class="sub">{preview.installed ? "" : "Build it first."}</span>
+      </span>
+    </label>
+  </section>
+{/if}
+
 <style>
   .badge {
     font-size: 0.7rem;
@@ -135,6 +219,20 @@
     padding: 0 0.3rem;
     margin-right: 0.3rem;
     vertical-align: middle;
+  }
+  .experimental {
+    border-color: var(--warn);
+  }
+  .facts {
+    margin: 0.5rem 0 0.75rem;
+    padding-left: 1.1rem;
+  }
+  .actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
   }
   .row {
     display: flex;

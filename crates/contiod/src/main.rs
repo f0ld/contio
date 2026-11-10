@@ -90,6 +90,11 @@ async fn main() -> anyhow::Result<()> {
         installer.set_flm(flm_config(f));
     }
     register_installed_backends(&config, &manager, &installer);
+    if registry.settings().vulkan_fa_preview
+        && let Err(e) = install_api::use_vulkan_preview(&installer, &manager, true).await
+    {
+        tracing::warn!("experimental Vulkan build: {e}");
+    }
     manager.set_default_gpu_api(registry.settings().gpu_api).await;
     registry.restore(&manager);
     tracing::info!(
@@ -263,7 +268,8 @@ fn register_installed_backends(config: &Config, manager: &ModelManager, installe
     let mut done = Vec::new();
     for installed in contio_install::discover(&installer.data_dir) {
         let key = (installed.backend, installed.gpu_api);
-        if configured(&installed) || done.contains(&key) {
+        // the experimental build is switched on separately (Settings → Experimental)
+        if installed.is_preview() || configured(&installed) || done.contains(&key) {
             continue;
         }
         if let Some(b) = install_api::backend_from_installed(&installed, installer) {

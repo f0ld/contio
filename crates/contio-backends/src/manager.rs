@@ -188,6 +188,34 @@ impl ModelManager {
         self.inner.backends.write().expect("backends lock poisoned").insert(0, backend);
     }
 
+    /// Unregister the backends `remove` matches. Loaded models keep running
+    /// until [`Self::restart_gpu_models`] or their next start.
+    pub fn remove_backends(&self, remove: impl Fn(&dyn Backend) -> bool) {
+        self.inner.backends.write().expect("backends lock poisoned").retain(|b| {
+            let gone = remove(b.as_ref());
+            if gone {
+                tracing::info!(backend = %b.describe(), "backend removed");
+            }
+            !gone
+        });
+    }
+
+    /// Stop loaded GPU models running on an `api` build; the next request
+    /// starts them on whichever build is registered first now.
+    pub async fn restart_gpu_models(&self, api: GpuApi) {
+        let _ops = self.inner.ops.lock().await;
+        let default = self.default_gpu_api();
+        let affected: Vec<String> = self
+            .profiles()
+            .into_iter()
+            .filter(|p| p.uses_gpu_api() && p.gpu_api.unwrap_or(default) == api)
+            .map(|p| p.id)
+            .collect();
+        for id in affected {
+            self.stop_slot(&id).await;
+        }
+    }
+
     pub fn default_gpu_api(&self) -> GpuApi {
         *self.inner.default_gpu_api.read().expect("gpu api lock poisoned")
     }
