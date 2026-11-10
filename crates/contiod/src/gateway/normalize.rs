@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall {
@@ -175,6 +175,19 @@ pub(crate) fn same_call(a: &ToolCall, b: &ToolCall) -> bool {
     }
 }
 
+/// A Chat Completions function tool. Fields the client left out are omitted:
+/// llama.cpp rejects `"description": null` ("type must be string").
+pub fn function_tool(name: &Value, description: &Value, parameters: &Value) -> Value {
+    let mut function = json!({ "name": name });
+    if description.is_string() {
+        function["description"] = description.clone();
+    }
+    if parameters.is_object() {
+        function["parameters"] = parameters.clone();
+    }
+    json!({ "type": "function", "function": function })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -238,5 +251,14 @@ mod tests {
         assert_eq!(f.reason.as_deref(), Some("tool_calls"));
         assert_eq!((f.prompt_tokens, f.completion_tokens), (Some(7), Some(3)));
         assert_eq!(n.meta.unwrap().1, "m");
+    }
+
+    #[test]
+    fn function_tool_omits_missing_fields() {
+        let t = function_tool(&json!("f"), &Value::Null, &Value::Null);
+        assert_eq!(t, json!({"type": "function", "function": {"name": "f"}}));
+        let t = function_tool(&json!("f"), &json!("d"), &json!({"type": "object"}));
+        assert_eq!(t["function"]["description"], "d");
+        assert_eq!(t["function"]["parameters"]["type"], "object");
     }
 }

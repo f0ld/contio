@@ -13,7 +13,8 @@ use super::normalize::{StreamNormalizer, ToolCall, same_call};
 use super::sse;
 
 /// Apply all guards to a non-streamed `chat.completion` in place.
-pub fn apply(request: &Value, resp: &mut Value) {
+/// `relaxed`: the backend didn't enforce `response_format` (`relax_response_format`).
+pub fn apply(request: &Value, resp: &mut Value, relaxed: bool) {
     let mut report = serde_json::Map::new();
 
     let mut collapsed = 0;
@@ -39,6 +40,9 @@ pub fn apply(request: &Value, resp: &mut Value) {
             tracing::warn!(?errors, "response violates response_format");
         }
         report.insert("schema_valid".into(), json!(valid));
+        if relaxed {
+            report.insert("schema_enforced".into(), json!(false));
+        }
         if !errors.is_empty() {
             report.insert("schema_errors".into(), json!(errors));
         }
@@ -57,11 +61,52 @@ fn as_tool_call(c: &Value) -> ToolCall {
     }
 }
 
+/// llama.cpp can't combine `tools` with a `response_format` grammar ("failed
+/// to parse grammar"). Drop the format and ask for the JSON in the system
+/// prompt instead; `apply` still validates the answer. Returns whether the
+/// request was changed.
+pub fn relax_response_format(request: &mut Value) -> bool {
+    let has_tools = request["tools"].as_array().is_some_and(|t| !t.is_empty());
+    let kind = request["response_format"]["type"].as_str().unwrap_or_default();
+    if !has_tools || (kind != "json_schema" && kind != "json_object") {
+        return false;
+    }
+    let mut hint = String::from("If you answer without calling a tool, reply with only a JSON object");
+    if kind == "json_schema" {
+        let schema = &request["response_format"]["json_schema"]["schema"];
+        hint.push_str(&format!(" that matches this JSON schema:\n{schema}"));
+    } else {
+        hint.push('.');
+    }
+    if let Some(obj) = request.as_object_mut() {
+        obj.remove("response_format");
+    }
+    let Some(messages) = request["messages"].as_array_mut() else { return true };
+    // chat templates (Qwen) reject system messages after the first turn, so
+    // extend the leading one
+    match messages.first_mut() {
+        Some(first) if first["role"] == "system" => match &mut first["content"] {
+            Value::String(s) => {
+                s.push_str("\n\n");
+                s.push_str(&hint);
+            }
+            Value::Array(parts) => parts.push(json!({ "type": "text", "text": hint })),
+            other => *other = Value::String(hint),
+        },
+        _ => messages.insert(0, json!({ "role": "system", "content": hint })),
+    }
+    true
+}
+
 /// `Some((valid, errors))` if the request asked for JSON output.
 fn check_response_format(request: &Value, resp: &Value) -> Option<(bool, Vec<String>)> {
     let format = &request["response_format"];
     let kind = format["type"].as_str()?;
     if kind != "json_schema" && kind != "json_object" {
+        return None;
+    }
+    // the format applies to the answer, not to tool calls
+    if resp["choices"][0]["message"]["tool_calls"].as_array().is_some_and(|c| !c.is_empty()) {
         return None;
     }
     let content = resp["choices"][0]["message"]["content"].as_str().unwrap_or_default();
@@ -173,7 +218,7 @@ mod tests {
     fn collapses_repeated_tool_calls_and_reports() {
         let call = |id: &str| json!({"id": id, "type": "function", "function": {"name": "f", "arguments": "{\"a\":1}"}});
         let mut resp = completion("", json!([call("1"), call("2"), call("3")]));
-        apply(&json!({}), &mut resp);
+        apply(&json!({}), &mut resp, false);
         assert_eq!(resp["choices"][0]["message"]["tool_calls"].as_array().unwrap().len(), 1);
         assert_eq!(resp["contio"]["tool_calls_collapsed"], 2);
     }
@@ -182,7 +227,7 @@ mod tests {
     fn leaves_clean_responses_untouched() {
         let mut resp = completion("hi", Value::Null);
         let before = resp.clone();
-        apply(&json!({"messages": []}), &mut resp);
+        apply(&json!({"messages": []}), &mut resp, false);
         assert_eq!(resp, before);
     }
 
@@ -191,16 +236,16 @@ mod tests {
         let req = json!({"response_format": {"type": "json_schema", "json_schema": {"name": "p", "schema": {
             "type": "object", "properties": {"age": {"type": "integer"}}, "required": ["age"]}}}});
         let mut ok = completion(r#"{"age": 36}"#, Value::Null);
-        apply(&req, &mut ok);
+        apply(&req, &mut ok, false);
         assert_eq!(ok["contio"]["schema_valid"], true);
 
         let mut wrong_type = completion(r#"{"age": "36"}"#, Value::Null);
-        apply(&req, &mut wrong_type);
+        apply(&req, &mut wrong_type, false);
         assert_eq!(wrong_type["contio"]["schema_valid"], false);
         assert!(wrong_type["contio"]["schema_errors"][0].as_str().unwrap().contains("integer"));
 
         let mut fenced = completion("```json\n{\"age\":36}\n```", Value::Null);
-        apply(&req, &mut fenced);
+        apply(&req, &mut fenced, false);
         assert_eq!(fenced["contio"]["schema_valid"], false);
     }
 
@@ -208,8 +253,61 @@ mod tests {
     fn json_object_mode_requires_an_object() {
         let req = json!({"response_format": {"type": "json_object"}});
         let mut arr = completion("[1]", Value::Null);
-        apply(&req, &mut arr);
+        apply(&req, &mut arr, false);
         assert_eq!(arr["contio"]["schema_valid"], false);
+    }
+
+    fn tool_request(messages: Value, format: Value) -> Value {
+        json!({"messages": messages, "response_format": format,
+               "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]})
+    }
+
+    #[test]
+    fn relaxes_schema_into_the_system_prompt() {
+        let schema = json!({"type": "object", "required": ["age"]});
+        let format = json!({"type": "json_schema", "json_schema": {"name": "p", "schema": schema}});
+
+        let mut req = tool_request(json!([{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}]), format.clone());
+        assert!(relax_response_format(&mut req));
+        assert!(req.get("response_format").is_none());
+        let system = req["messages"][0]["content"].as_str().unwrap();
+        assert!(system.starts_with("Be brief.\n\n") && system.contains(r#""required":["age"]"#), "{system}");
+        assert_eq!(req["messages"].as_array().unwrap().len(), 2);
+
+        let mut no_system = tool_request(json!([{"role": "user", "content": "hi"}]), json!({"type": "json_object"}));
+        assert!(relax_response_format(&mut no_system));
+        assert_eq!(no_system["messages"][0]["role"], "system");
+        assert_eq!(no_system["messages"][1]["role"], "user");
+
+        let mut parts = tool_request(json!([{"role": "system", "content": [{"type": "text", "text": "x"}]}]), format);
+        assert!(relax_response_format(&mut parts));
+        assert_eq!(parts["messages"][0]["content"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn keeps_format_without_tools_or_json() {
+        let mut no_tools = json!({"messages": [], "response_format": {"type": "json_object"}});
+        assert!(!relax_response_format(&mut no_tools));
+        assert!(no_tools.get("response_format").is_some());
+
+        let mut text = tool_request(json!([]), json!({"type": "text"}));
+        let before = text.clone();
+        assert!(!relax_response_format(&mut text));
+        assert_eq!(text, before);
+    }
+
+    #[test]
+    fn tool_call_answers_skip_schema_check_and_report_relaxed() {
+        let req = json!({"response_format": {"type": "json_object"}});
+        let call = json!([{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]);
+        let mut calls = completion("", call);
+        apply(&req, &mut calls, true);
+        assert!(calls.get("contio").is_none());
+
+        let mut answer = completion(r#"{"a": 1}"#, Value::Null);
+        apply(&req, &mut answer, true);
+        assert_eq!(answer["contio"]["schema_valid"], true);
+        assert_eq!(answer["contio"]["schema_enforced"], false);
     }
 
     #[tokio::test]

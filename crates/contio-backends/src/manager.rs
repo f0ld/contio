@@ -79,6 +79,8 @@ enum SlotState {
 pub struct Lease {
     pub base_url: String,
     pub upstream_model: String,
+    /// `Backend::name` of the instance serving the request.
+    pub backend: &'static str,
     in_flight: Arc<AtomicU32>,
     last_used: Arc<AtomicU64>,
     epoch: Instant,
@@ -474,6 +476,7 @@ impl ModelManager {
         Some(Lease {
             base_url: format!("http://127.0.0.1:{}", instance.port()),
             upstream_model,
+            backend: slot.backend,
             in_flight: slot.in_flight.clone(),
             last_used: slot.last_used.clone(),
             epoch: self.inner.epoch,

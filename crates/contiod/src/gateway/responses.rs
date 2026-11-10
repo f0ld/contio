@@ -16,7 +16,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::{Stream, StreamExt, stream};
 use serde_json::{Value, json};
 
-use super::normalize::{Completion, Delta, Finish, StreamNormalizer};
+use super::normalize::{Completion, Delta, Finish, StreamNormalizer, function_tool};
 use super::{new_id, openai_error, send, sse, sse_response};
 use crate::api::AppState;
 
@@ -155,10 +155,7 @@ pub(crate) fn to_chat(req: &Value, previous: Vec<Value>) -> Result<(Value, Vec<V
         .into_iter()
         .flatten()
         .filter(|t| t["type"] == "function")
-        .map(|t| {
-            json!({"type": "function", "function": {
-                "name": t["name"], "description": t["description"], "parameters": t["parameters"]}})
-        })
+        .map(|t| function_tool(&t["name"], &t["description"], &t["parameters"]))
         .collect();
     if !tools.is_empty() {
         chat["tools"] = Value::Array(tools);

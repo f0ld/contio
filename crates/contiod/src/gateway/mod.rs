@@ -30,6 +30,8 @@ use crate::usage::Tapped;
 pub struct Upstream {
     pub lease: Lease,
     pub response: Tapped,
+    /// `response_format` was dropped for the backend (`guards::relax_response_format`).
+    pub format_relaxed: bool,
 }
 
 /// Resolve `request.model`, make sure the model runs, rewrite the model name for
@@ -41,6 +43,10 @@ pub async fn send(state: &AppState, mut request: Value, path: &str) -> Result<Up
     let (id, upstream_override) = resolve(state, name);
     let lease = state.manager.acquire(&id).await.map_err(|e| backend_error(&e))?;
     request["model"] = Value::String(upstream_override.unwrap_or_else(|| lease.upstream_model.clone()));
+    let format_relaxed = lease.backend == "llama.cpp" && guards::relax_response_format(&mut request);
+    if format_relaxed {
+        tracing::info!("tools with response_format: schema moved to the system prompt for llama.cpp");
+    }
     // streams carry usage only on request: ask for it, and keep the extra
     // chunk from clients that didn't
     let streaming = request["stream"] == true && (path.ends_with("/chat/completions") || path.ends_with("/completions"));
@@ -53,7 +59,7 @@ pub async fn send(state: &AppState, mut request: Value, path: &str) -> Result<Up
         Ok(response) => {
             let mut response = Tapped::new(response, state.usage.clone(), &id);
             response.strip_usage(inject);
-            Ok(Upstream { lease, response })
+            Ok(Upstream { lease, response, format_relaxed })
         }
         Err(e) => Err(openai_error(
             StatusCode::BAD_GATEWAY,
@@ -94,11 +100,12 @@ pub async fn chat(State(state): State<AppState>, body: Bytes) -> Response {
             Ok(b) => b,
             Err(e) => return openai_error(StatusCode::BAD_GATEWAY, "upstream_error", &e.to_string(), None),
         };
+        let relaxed = up.format_relaxed;
         drop(up.lease);
         let Ok(mut resp) = serde_json::from_slice::<Value>(&bytes) else {
             return (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), bytes).into_response();
         };
-        guards::apply(&request, &mut resp);
+        guards::apply(&request, &mut resp, relaxed);
         return Json(resp).into_response();
     }
 
