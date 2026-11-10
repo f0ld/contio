@@ -160,7 +160,7 @@ guesses until measured.
 | 6e | EAGLE-3 when llama.cpp has it; draft length from acceptance rate | writing | med | open |
 | **Tier 3** | | | | |
 | 7a | Per-op profiling in `contio bench` (rocprofv3, Vulkan perf logger) | basis for 7b–7d | med | Vulkan + ROCm profiled, kernel bench |
-| 7b | Flash-attention kernel for gfx1150 (Vulkan coopmat / HIP WMMA), upstream | reading at depth | high | open |
+| 7b | Flash-attention kernel for gfx1150 (Vulkan coopmat / HIP WMMA), upstream | reading at depth | high | Vulkan: upstream PR #31323 (+60% at 64k); ROCm open |
 | 7c | MoE decode kernels: fused routing + expert matmuls, fewer launches | writing | high | open |
 | 7d | NPU reads, GPU writes (or NPU drafts) | reading / GPU free | very high | open |
 | 7e | Expert usage from own traffic: prune or quantize cold experts | writing, memory | high | open |
@@ -239,9 +239,46 @@ fits in cache (4k), 3.3× slower than ROCm at 64k.
 `flash_attn_ext_f16<256,256,8,8>` (tile = 8 tokens × 8 heads of one GQA group), 128 workgroups ×
 256 threads, **256 VGPRs and 1.1–1.3 KB scratch spills per thread**: register-bound.
 
+**Vulkan tile height** (spike branch `contio-fa`, env `GGML_VK_FA_BR`). The coopmat1 path uses 16 query
+rows per workgroup, so K/V is streamed once per 16 rows (~34 GB per layer at 64k; ROCm's 64-row GQA
+tiles ~8.6 GB). Taller tiles, correctness test passing:
+
+| | Br 16 (default) | Br 32 | Br 48 | Br 64 |
+|---|---|---|---|---|
+| kernel alone, TFLOPS at 64k | 1.49 | 3.13 | **3.43** | 1.57 (> 64 KB shared memory → scalar fallback) |
+| in the model, attention per layer at 33k | 100 ms | – | **52.6 ms** | – |
+| whole model, reading 2048 at 32k (3× alternating, AC) | 257.1 | – | **329.1 (+28%)** | – |
+
+The model's KV cache interleaves the 2 heads per cell, so Vulkan copies K/V into a reordered scratch
+first (`dequant_kv`) and accumulates in f32; micro-benchmarks must take that path to be meaningful.
+
+**Upstream PR #31323** (Vulkan maintainer, open; head `9731be4`, built in the worktree
+`llama.cpp-pr31323`) does this properly: a new "flipped" coopmat1 shader in which each subgroup owns 16
+query rows across the whole head and keeps Q and O in coopmat registers, giving 64-row tiles. It is
+enabled for UMA RDNA3/4 and our model takes it (`flip=1 block_rows=64`, through `dequant_kv`). All
+5368 FLASH_ATTN_EXT tests pass on gfx1150 (RADV, Mesa 26.2.5).
+
+| | 4k | 16k | 32k | 64k | 96k |
+|---|---|---|---|---|---|
+| kernel alone, TFLOPS, master b12068 | 3.42 | 2.01 | 1.32 | 1.51 | 1.39 |
+| kernel alone, TFLOPS, PR | **5.41** | **5.65** | **6.07** | **6.20** | **6.19** |
+
+Whole model, reading 2048 tokens, 3 alternating pairs on AC, each run started below 60 °C:
+
+| tok/s | 32k | 64k | writing at 64k (1 run) |
+|---|---|---|---|
+| Vulkan master b12068 | 260.9 / 253.7 / 252.9 (mean 255.8) | 161.3 / 167.2 / 163.5 (mean 164.0) | 15.2 |
+| Vulkan PR #31323 | 352.2 / 352.0 / 286.6 (mean 330.3, **+29%**) | 266.8 / 268.4 / 250.0 (mean 261.7, **+60%**) | 15.8 |
+| ROCm b12068 (5a, other session) | 346 | 245 | 15.6 |
+
+The PR's third 32k run (286.6) has no visible cause in the logged state; its third 64k run started at
+80 °C because the cooldown timed out. Excluding those, the PR gives +38% at 32k and +63% at 64k.
+With the PR, Vulkan reads as fast as ROCm at 32k and faster at 64k, and it still writes ~7% faster.
+
 **7b** Attention at depth is ~3/4 of reading time: the biggest lever by far. Two concrete targets:
-- **Vulkan: GQA packing for large batches** (as the HIP kernel does). Expected from ~1.5 toward ~4–5
-  TFLOPS at depth; Vulkan already writes ~7% faster, so it could become the best backend for agents.
+- **Vulkan: taller tiles**: covered by upstream PR #31323 (above: +60% whole model at 64k). Our
+  part: wait for it to merge (decided 2026-11-10), then reconsider Vulkan for `coder`. Our Br 48
+  hack is superseded.
 - **ROCm: get under the register limit** (Q in LDS, split the 256-wide output across waves), check the
   ISA for spills in the K/V loop, then larger query tiles to cut K/V re-reads (rough estimate: the
   current tiling moves ~8.6 GB per layer at 64k, ~72 ms of the measured 114 ms at full bandwidth).

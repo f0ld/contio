@@ -22,7 +22,10 @@ json="$out/$label.json"
 
 profile=$(busctl get-property net.hadess.PowerProfiles /net/hadess/PowerProfiles \
     net.hadess.PowerProfiles ActiveProfile 2>/dev/null | cut -d'"' -f2)
-echo "# $label: ${profile:-?} profile, $(date -Iseconds)"
+battery=$(cat /sys/class/power_supply/BAT*/capacity 2>/dev/null | head -1)
+ac=$(cat /sys/class/power_supply/AC*/online 2>/dev/null | head -1)
+# a laptop under ~15% battery may switch to power saving mid-run and skew the numbers
+echo "# $label: ${profile:-?} profile, AC ${ac:-?}, battery ${battery:-?}%, $(date -Iseconds)"
 "$bench" -m "$model" -ngl 999 -fa 1 -r 1 -p 2048 -n 128 -d "$depths" -o json >"$json"
 python3 - "$json" <<'EOF'
 import json, sys
