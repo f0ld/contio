@@ -426,5 +426,5 @@ Finding: the CPU estimate is too low (llama.cpp's CPU RSS is 1.7× the estimate)
 - whisper.cpp has no prebuilt Linux binaries upstream; Podman images exist but only tagged by commit (`main-vulkan-<sha>`), so only the source install is offered. large-v3-turbo doesn't translate (model limitation).
 - NPU models have no memory estimate yet (FLM's `footprint` is shown in the catalog but not used for pool budgeting).
 - Shallow source builds of llama.cpp report version `b1`, so the llama-server web UI asset isn't fetched (the API is unaffected).
-- llama.cpp Vulkan can't attend to one sequence's K/V rows ("Flash Attention over K/V rows not supported"): attention stays on the GPU but runs densely over the whole unified cache, other slots included (PERFORMANCE.md 7a). `--flash-attn on` is still +9% prefill at 4k tokens, so it stays the default.
+- llama.cpp Vulkan can't attend to one sequence's K/V rows ("Flash Attention over K/V rows not supported"): attention stays on the GPU but runs over the whole unified cache, other slots included; measured cost is small (−6% Vulkan, −2% ROCm with a 71k neighbour, PERFORMANCE.md 7a). ROCm logs the same warning. `--flash-attn on` is still +9% prefill at 4k tokens, so it stays the default.
 - Podman containers use the daemon's `XDG_DATA_HOME` storage (a custom value isolates them from the user's default storage).

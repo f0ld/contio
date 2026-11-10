@@ -203,14 +203,21 @@ and gets slower per FLOP as the context grows (4.7 TFLOPS at 1k → 2.3 at 66k).
 nearly flat with depth. ROCm has no profiler on Fedora (`rocprofiler-sdk` isn't packaged); its
 reading speed suggests attention dominates there too.
 
-The "Flash Attention over K/V rows not supported" warning does **not** mean a CPU fallback. Vulkan
-can't restrict attention to one sequence's cells of the unified cache (`ggml_flash_attn_ext_rows`,
-`src[5]`), so it attends densely over the whole cache with a mask. In llama-bench (one sequence) that
-costs nothing; in llama-server, with conversations cached in other slots, each request also scans
-their cells. ROCm (HIP) supports row lists. Not yet measured: the cost with busy neighbour slots.
+The "Flash Attention over K/V rows not supported" warning does **not** mean a CPU fallback. Neither
+Vulkan nor ROCm (both b12068, gfx1150) can restrict attention to one sequence's cells of the unified
+cache (`ggml_flash_attn_ext_rows`, `src[5]`), so both attend over the whole cache with a mask. That
+costs little, because fully masked blocks are cheap. Measured with llama-server (`-np 2 -kvu`), slot 1
+reading 2.4k fresh tokens while slot 0 is empty vs. holding 71k tokens:
+
+| tok/s | neighbour empty | neighbour holds 71k |
+|---|---|---|
+| Vulkan | 503 | 472 (−6%) |
+| ROCm | 539 | 526 (−2%) |
+
+So row-list support is not worth building for speed.
 
 **7b** Attention at depth is ~3/4 of reading time and runs at a tenth of the GPU's peak: the biggest
-lever by far. On Vulkan add K/V-row support (also fixes the scan over other slots); then tune the
-coopmat1 kernel for long K/V (split-K over the context, larger tiles). ROCm's q8_0 KV cache costs 34%
+lever by far. Tune the kernel for long K/V on this GPU (split-K over the context, tile sizes,
+occupancy); K/V row lists are not needed (see 7a). ROCm's q8_0 KV cache costs 34%
 writing (2c); the HIP WMMA kernel is the same kind of work.
 **7f** Changes what the model sees: off by default, measured with the agentic workloads.
