@@ -89,7 +89,7 @@ export const PERF_SETTINGS: Record<PerfSetting["key"], PerfSetting> = {
     what:
       "Which llama.cpp build runs this model on the GPU. Coding agents (OpenCode, …) resend long conversations, so prompt reading deep in the context usually decides how fast they feel.",
     upsides: [
-      "ROCm: reads prompts +30% faster at 64k context, +59% at 96k (Vulkan's flash attention falls back to the CPU here)",
+      "ROCm: reads prompts +30% faster at 64k context, +59% at 96k (Vulkan's attention kernel is slow at depth)",
       "Vulkan: writes answers 6–8% faster (the default)",
     ],
     downsides: ["ROCm needs its own install (Backends)", "Switching restarts the model"],
