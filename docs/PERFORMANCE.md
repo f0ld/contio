@@ -159,7 +159,7 @@ guesses until measured.
 | 6d | CPU threads on the Zen 5 cores (not Zen 5c) | MoE offload, CPU models | low | open |
 | 6e | EAGLE-3 when llama.cpp has it; draft length from acceptance rate | writing | med | open |
 | **Tier 3** | | | | |
-| 7a | Per-op profiling in `contio bench` (rocprofv3, Vulkan perf logger) | basis for 7b–7d | med | first Vulkan profile done |
+| 7a | Per-op profiling in `contio bench` (rocprofv3, Vulkan perf logger) | basis for 7b–7d | med | Vulkan + ROCm profiled, kernel bench |
 | 7b | Flash-attention kernel for gfx1150 (Vulkan coopmat / HIP WMMA), upstream | reading at depth | high | open |
 | 7c | MoE decode kernels: fused routing + expert matmuls, fewer launches | writing | high | open |
 | 7d | NPU reads, GPU writes (or NPU drafts) | reading / GPU free | very high | open |
@@ -185,7 +185,11 @@ are untested. Vulkan writes ~7% faster than ROCm at every depth; ROCm reads 21�
 **5b** Moot. llama.cpp no longer has a rocWMMA option: RDNA 3/3.5 use its own WMMA flash-attention kernel
 (`amd_wmma_available`), and Fedora's rocWMMA 7.1 only knows gfx1151 anyway. The experts and Q4_K/Q5_K
 weights go through llama.cpp's MMQ kernels, so hipBLASLt or a newer rocBLAS would only reach the few
-Q6_K matmuls (batch > 256). HIP graphs are on by default.
+Q6_K matmuls (batch > 256). HIP graphs are on by default. A newer ROCm is **worse**: llama.cpp built
+against ROCm 10.1 (TheRock stable tarball) runs the same flash-attention kernel at half the speed
+(2.3 vs 4.8 TFLOPS reading at 64k; writing unchanged). Stay on Fedora's ROCm 7.1. Building against the
+tarball needs `-DCMAKE_HIP_FLAGS="--rocm-path=<r> -isystem <r>/include"`, because clang searches the
+ROCm headers after `/usr/include`.
 **5c** Hybrid models (Qwen3.5/3.6) keep recurrent state; verify a restored slot really skips the re-read.
 **7a** First profile (Vulkan b12068, `GGML_VK_PERF_LOGGER=1`, 35B, reading 2048 tokens; ms per 512-token
 batch, logger overhead included):
@@ -216,8 +220,31 @@ reading 2.4k fresh tokens while slot 0 is empty vs. holding 71k tokens:
 
 So row-list support is not worth building for speed.
 
-**7b** Attention at depth is ~3/4 of reading time and runs at a tenth of the GPU's peak: the biggest
-lever by far. Tune the kernel for long K/V on this GPU (split-K over the context, tile sizes,
-occupancy); K/V row lists are not needed (see 7a). ROCm's q8_0 KV cache costs 34%
+**Attention kernel in isolation** (`test-backend-ops perf`, our shapes added on the `contio-fa`
+branch of the spike llama.cpp checkout: head size 256, 2 K/V heads × GQA 8, f16 K/V), TFLOPS:
+
+| reading 512 tokens | 1k | 4k | 16k | 64k | 96k |
+|---|---|---|---|---|---|
+| Vulkan | 3.56 | 3.22 | 1.91 | 1.46 | 1.44 |
+| ROCm 7.1 | 3.34 | 4.55 | 4.84 | 4.81 | 4.94 |
+| ROCm 7.1, same work without GQA | – | 1.85 | 1.84 | 1.83 | – |
+| Vulkan, same work without GQA | – | 3.34 | 1.89 | 1.49 | – |
+
+Writing one token: both ~590 GFLOPS at depth (~74 GB/s, memory-bound). Vulkan doesn't exploit GQA when
+reading: it packs the 8 query heads of a group into one tile only for ≤ 8 query tokens
+(`ggml-vulkan.cpp:8244`), so for 512 tokens it re-reads K/V per head, 8× the traffic; fine while K/V
+fits in cache (4k), 3.3× slower than ROCm at 64k.
+
+`rocprofv3` (ROCm 10.1 tarball; works on the Fedora-built binaries too): the HIP kernel is
+`flash_attn_ext_f16<256,256,8,8>` (tile = 8 tokens × 8 heads of one GQA group), 128 workgroups ×
+256 threads, **256 VGPRs and 1.1–1.3 KB scratch spills per thread**: register-bound.
+
+**7b** Attention at depth is ~3/4 of reading time: the biggest lever by far. Two concrete targets:
+- **Vulkan: GQA packing for large batches** (as the HIP kernel does). Expected from ~1.5 toward ~4–5
+  TFLOPS at depth; Vulkan already writes ~7% faster, so it could become the best backend for agents.
+- **ROCm: get under the register limit** (Q in LDS, split the 256-wide output across waves), check the
+  ISA for spills in the K/V loop, then larger query tiles to cut K/V re-reads (rough estimate: the
+  current tiling moves ~8.6 GB per layer at 64k, ~72 ms of the measured 114 ms at full bandwidth).
+K/V row lists are not needed (see 7a). ROCm's q8_0 KV cache costs 34%
 writing (2c); the HIP WMMA kernel is the same kind of work.
 **7f** Changes what the model sees: off by default, measured with the agentic workloads.

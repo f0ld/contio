@@ -224,3 +224,6 @@ __marimo__/
 
 # release builds: sidecar binaries copied in by the release workflow
 apps/gui/src-tauri/binaries/
+
+# personal learning notes (theory behind the performance work), not part of the project
+learn/
